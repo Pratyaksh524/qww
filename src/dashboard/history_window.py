@@ -56,7 +56,7 @@ class HistoryWindow(QDialog):
         # Set minimum size for usability
         self.setMinimumSize(900, 500)
         
-        # Enable responsive design
+        # Enable responsive design with enhanced calendar styling
         self.setStyleSheet("""
             QDialog {
                 background-color: #f8f9fa;
@@ -111,6 +111,16 @@ class HistoryWindow(QDialog):
                 background-color: white;
                 min-width: 120px;
             }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid #007bff;
+                border-top: 5px solid transparent;
+                border-bottom: 5px solid transparent;
+            }
             QDateEdit {
                 border: 2px solid #dee2e6;
                 border-radius: 6px;
@@ -118,6 +128,95 @@ class HistoryWindow(QDialog):
                 font-size: 14px;
                 background-color: white;
                 min-width: 120px;
+            }
+            QDateEdit:focus {
+                border-color: #007bff;
+            }
+            QDateEdit::drop-down {
+                border: none;
+                width: 20px;
+                image: none;
+            }
+            QCalendarWidget {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+                padding: 5px;
+            }
+            QCalendarWidget QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 4px;
+                padding: 4px 8px;
+                margin: 2px;
+                min-width: 30px;
+                min-height: 30px;
+                font-weight: bold;
+                color: #495057;
+            }
+            QCalendarWidget QToolButton:hover {
+                background-color: #e9ecef;
+                border-color: #007bff;
+                color: #007bff;
+            }
+            QCalendarWidget QToolButton:pressed {
+                background-color: #007bff;
+                color: white;
+            }
+            QCalendarWidget QToolButton::menu-indicator {
+                width: 0px;
+                height: 0px;
+            }
+            QCalendarWidget QSpinBox {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 4px;
+                font-weight: bold;
+                color: #495057;
+            }
+            QCalendarWidget QSpinBox:focus {
+                border-color: #007bff;
+            }
+            QCalendarWidget QAbstractItemView {
+                background-color: white;
+                selection-background-color: #007bff;
+                selection-color: white;
+                outline: none;
+            }
+            QCalendarWidget QAbstractItemView::item {
+                padding: 8px;
+                border-radius: 4px;
+                margin: 1px;
+            }
+            QCalendarWidget QAbstractItemView::item:hover {
+                background-color: #e9ecef;
+                color: #007bff;
+            }
+            QCalendarWidget QAbstractItemView::item:selected {
+                background-color: #007bff;
+                color: white;
+            }
+            QCalendarWidget QTableView {
+                background-color: white;
+                gridline-color: #e9ecef;
+                selection-background-color: #007bff;
+                selection-color: white;
+            }
+            QCalendarWidget QHeaderView {
+                background-color: #f8f9fa;
+                border: none;
+                border-bottom: 2px solid #dee2e6;
+                padding: 4px;
+                font-weight: bold;
+                color: #495057;
+            }
+            QCalendarWidget QHeaderView::section {
+                background-color: #f8f9fa;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                color: #495057;
             }
             QLabel {
                 font-weight: bold;
@@ -242,24 +341,24 @@ class HistoryWindow(QDialog):
         btn_row.setSpacing(10)
         
         # Create responsive buttons with icons and better styling
-        self.open_btn = QPushButton("📄 Open Report")
+        self.open_btn = QPushButton(" Open Report")
         self.open_btn.setMinimumHeight(40)
         self.open_btn.clicked.connect(self.open_selected_report)
         btn_row.addWidget(self.open_btn)
 
-        self.export_all_btn = QPushButton("📊 Export All")
+        self.export_all_btn = QPushButton(" Export All")
         self.export_all_btn.setMinimumHeight(40)
         self.export_all_btn.clicked.connect(self.export_all_reports)
         btn_row.addWidget(self.export_all_btn)
 
-        self.send_review_btn = QPushButton("📤 Send for Review")
+        self.send_review_btn = QPushButton(" Send for Review")
         self.send_review_btn.setMinimumHeight(40)
         self.send_review_btn.clicked.connect(self.send_report_for_review)
         btn_row.addWidget(self.send_review_btn)
 
         btn_row.addStretch(1)
 
-        self.close_btn = QPushButton("❌ Close")
+        self.close_btn = QPushButton(" Close")
         self.close_btn.setMinimumHeight(40)
         self.close_btn.clicked.connect(self.close)
         btn_row.addWidget(self.close_btn)
