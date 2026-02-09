@@ -614,17 +614,7 @@ class LoginRegisterDialog(QDialog):
                 'registered_at': datetime.now().isoformat()
             }
             
-            # Upload to cloud in background (non-blocking)
-            import threading
-            def upload_in_background():
-                result = uploader.upload_user_signup(user_data)
-                if result.get('status') == 'success':
-                    print(f" User signup uploaded to cloud: {name}")
-                else:
-                    print(f" Failed to upload user signup: {result.get('message', 'Unknown error')}")
-            
-            thread = threading.Thread(target=upload_in_background, daemon=True)
-            thread.start()
+
         except Exception as e:
             print(f" Error uploading user signup: {e}")
         
@@ -659,7 +649,36 @@ def main():
         crash_logger.log_info("Application starting", "APP_START")
         
         logger.info("Starting ECG Monitor Application")
-        
+
+        # =========================================================
+        # START BACKGROUND UPLOAD SERVICE (GLOBAL)
+        # =========================================================
+        # Start this immediately so uploads happen even at login screen
+        # and regardless of which user logs in.
+        try:
+            from utils.auto_sync_service import start_auto_sync
+            # Start auto-sync service (runs every 15s)
+            # This will:
+            # 1. Scan for new/modified reports
+            # 2. Initialize CloudUploader
+            # 3. Initialize OfflineQueue (which handles connectivity changes)
+            start_auto_sync(interval_seconds=15)
+            logger.info("✅ Global background upload service started")
+            
+            # Also force an immediate check of the offline queue
+            try:
+                from utils.offline_queue import get_offline_queue
+                offline_queue = get_offline_queue()
+                if offline_queue:
+                    stats = offline_queue.get_stats()
+                    if stats.get('pending_count', 0) > 0:
+                        logger.info(f"Found {stats.get('pending_count')} pending uploads - starting sync")
+            except Exception as e:
+                logger.warning(f"Could not check offline queue: {e}")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to start background services: {e}")
+
         app = QApplication(sys.argv)
         app.setApplicationName("ECG Monitor")
         app.setApplicationVersion("1.3")    

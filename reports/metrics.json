@@ -2014,5 +2014,93 @@
       0.53,
       -0.249
     ]
+  },
+  {
+    "timestamp": "2026-02-06 12:11:05",
+    "file": "C:\\Users\\DELL\\Downloads\\ECG_Report_12_1_20260206_121100.pdf",
+    "HR_bpm": 41,
+    "PR_ms": 200,
+    "QRS_ms": 85,
+    "QT_ms": 346,
+    "QTc_ms": 340,
+    "ST_ms": 0.0,
+    "RR_ms": 1463,
+    "RV5_plus_SV1_mV": 0.582,
+    "P_QRS_T_mm": [
+      -149,
+      42,
+      -105
+    ],
+    "QTCF": 344.2,
+    "RV5_SV1_mV": [
+      0.334,
+      0.248
+    ]
+  },
+  {
+    "timestamp": "2026-02-07 12:18:14",
+    "file": "C:\\Users\\DELL\\Downloads\\ECG_Report_12_1_20260207_121810.pdf",
+    "HR_bpm": 54,
+    "PR_ms": 200,
+    "QRS_ms": 85,
+    "QT_ms": 351,
+    "QTc_ms": 349,
+    "ST_ms": 0.0,
+    "RR_ms": 1111,
+    "RV5_plus_SV1_mV": 0.577,
+    "P_QRS_T_mm": [
+      -149,
+      39,
+      -131
+    ],
+    "QTCF": 309.2,
+    "RV5_SV1_mV": [
+      0.526,
+      0.051
+    ]
+  },
+  {
+    "timestamp": "2026-02-07 16:02:43",
+    "file": "C:\\Users\\DELL\\Documents\\merge\\merge\\ECG_Report_12_1_20260207_160240.pdf",
+    "HR_bpm": 159,
+    "PR_ms": 148,
+    "QRS_ms": 85,
+    "QT_ms": 348,
+    "QTc_ms": 556,
+    "ST_ms": 0.0,
+    "RR_ms": 377,
+    "RV5_plus_SV1_mV": 1.595,
+    "P_QRS_T_mm": [
+      -152,
+      -128,
+      -141
+    ],
+    "QTCF": 336.0,
+    "RV5_SV1_mV": [
+      0.545,
+      -1.05
+    ]
+  },
+  {
+    "timestamp": "2026-02-07 17:48:21",
+    "file": "C:\\Users\\DELL\\Downloads\\ECG_Report_12_1_20260207_174817.pdf",
+    "HR_bpm": 43,
+    "PR_ms": 121,
+    "QRS_ms": 50,
+    "QT_ms": 342,
+    "QTc_ms": 341,
+    "ST_ms": 0.0,
+    "RR_ms": 1395,
+    "RV5_plus_SV1_mV": 0.681,
+    "P_QRS_T_mm": [
+      -149,
+      42,
+      -124
+    ],
+    "QTCF": 473.4,
+    "RV5_SV1_mV": [
+      0.401,
+      0.28
+    ]
   }
 ]

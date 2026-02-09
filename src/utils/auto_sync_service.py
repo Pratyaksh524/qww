@@ -98,7 +98,8 @@ class AutoSyncService:
             # Upload PDF
             result = self.cloud_uploader.upload_report(str(file_path))
             
-            if result.get('status') == 'success':
+            status = result.get('status')
+            if status == 'success':
                 print(f"✅ Auto-sync: Uploaded {file_path.name}")
                 
                 # Upload JSON twin if exists
@@ -109,6 +110,9 @@ class AutoSyncService:
                         if json_result.get('status') == 'success':
                             print(f"✅ Auto-sync: Uploaded {json_twin.name}")
                 
+                return True
+            elif status == 'already_uploaded':
+                print(f"ℹ️  Auto-sync: Skipped duplicate {file_path.name}")
                 return True
             else:
                 print(f"⚠️  Auto-sync: Upload failed for {file_path.name}: {result.get('message', 'Unknown error')}")
@@ -159,10 +163,14 @@ class AutoSyncService:
                 # Upload to cloud
                 result = self.cloud_uploader.upload_user_signup(user_data)
                 
-                if result.get('status') == 'success':
+                status = result.get('status')
+                if status == 'success':
                     print(f"✅ Auto-sync: Uploaded user signup: {username}")
                     self.synced_files.add(user_key)
                     upload_count += 1
+                elif status == 'already_uploaded':
+                    print(f"ℹ️  Auto-sync: Skipped duplicate user signup: {username}")
+                    self.synced_files.add(user_key)
                 else:
                     print(f"⚠️  Auto-sync: Failed to upload user {username}: {result.get('message', 'Unknown error')}")
             

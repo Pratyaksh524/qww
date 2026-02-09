@@ -54,7 +54,8 @@ import re
 from collections import deque
 from typing import Deque, Dict, List, Tuple, Optional
 from ecg.recording import ECGMenu
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, iirnotch, filtfilt
+from scipy.ndimage import gaussian_filter1d
 from utils.settings_manager import SettingsManager
 from utils.localization import translate_text
 from .demo_manager import DemoManager
@@ -471,7 +472,7 @@ class LiveLeadWindow(QWidget):
         self.ax.set_facecolor('#000')
         self.ax.set_ylim(-400, 400)
         self.ax.set_xlim(0, buffer_size)
-        self.line, = self.ax.plot([0]*buffer_size, color=self.color, lw=2)
+        self.line, = self.ax.plot([0]*buffer_size, color=self.color, lw=0.7)
         self.canvas = FigureCanvas(self.fig)
         layout.addWidget(self.canvas)
 
@@ -655,14 +656,25 @@ class ECGTestPage(QWidget):
         self.page_stack.addWidget(self.detailed_widget)
         self.setLayout(self.page_stack)
 
+        # Enable antialiasing for smoother lines (matches standalone script)
+        pg.setConfigOptions(antialias=True)
+
         self.test_name = test_name
         self.leads = self.LEADS_MAP[test_name]
+        self.display_mode = 'scroll'  # Default display mode
         self.base_buffer_size = 2000  # Base buffer used for speed scaling
         self.buffer_size = self.base_buffer_size  # Increased buffer size for all leads
         # Use GitHub version data structure: list of numpy arrays for all 12 leads
         # Initialize data buffers with memory management
         self.data = [np.zeros(HISTORY_LENGTH, dtype=np.float32) for _ in range(12)]
         
+        # Filter Pipeline Configuration (from standalone_ecg_plot.py)
+        self.SAMPLE_RATE = 500
+        self.SMOOTH_SIGMA = 0.8
+        self.INTERP_FACTOR = 4
+        # 50 Hz NOTCH FILTER
+        self.b_notch, self.a_notch = iirnotch(w0=50.0, Q=30.0, fs=self.SAMPLE_RATE)
+
         # Track overlay state and current layout (12:1 vs 6:2)
         self._overlay_active = False
         self._current_overlay_layout = None
@@ -1517,6 +1529,14 @@ class ECGTestPage(QWidget):
             fs = float(self.sampler.sampling_rate)
         elif hasattr(self, 'sampling_rate') and self.sampling_rate > 10:
             fs = float(self.sampling_rate)
+            
+        # User's comprehensive metrics integration (User-Provided Logic)
+        try:
+            from .metrics.comprehensive_analysis import calculate_comprehensive_metrics
+            user_metrics = calculate_comprehensive_metrics(lead_ii_data, fs)
+        except Exception as e:
+            print(f"Error in comprehensive metrics: {e}")
+            user_metrics = {k: None for k in ["heart_rate", "rr_interval", "pr_interval", "qrs_duration", "qt_interval", "qtc_interval"]}
         
         # DUAL-PATH ECG ARCHITECTURE (Clinical Standard):
         # 1. DISPLAY CHANNEL (0.5-40 Hz): Used for R-peak detection only
@@ -1736,6 +1756,12 @@ class ECGTestPage(QWidget):
             heart_rate_raw = int(round(60000.0 / rr_ms))
         else:
             heart_rate_raw = 60  # Fallback if RR is invalid
+            
+        # OVERRIDE: Use user's comprehensive metrics if available
+        if user_metrics["heart_rate"] is not None:
+            heart_rate_raw = user_metrics["heart_rate"]
+            if user_metrics["rr_interval"] is not None:
+                rr_ms = user_metrics["rr_interval"]
         
         # REAL MODE: Always use real values from hardware calculations
         # Reference table removed - using only real calculated values
@@ -1915,6 +1941,10 @@ class ECGTestPage(QWidget):
             median_beat_i=median_beat_i, 
             median_beat_avf=median_beat_avf
         )
+        
+        # OVERRIDE: Use user's comprehensive metrics if available
+        if user_metrics["pr_interval"] is not None:
+            pr_interval_raw = user_metrics["pr_interval"]
         # OPTIMIZED: Reduced print frequency for better performance
         if not hasattr(self, '_pr_print_count'):
             self._pr_print_count = 0
@@ -1985,6 +2015,10 @@ class ECGTestPage(QWidget):
         
         # REAL MODE: Calculate QRS Complex duration from median beat (standardized function)
         qrs_duration_raw = measure_qrs_duration_from_median_beat(median_beat_ii, time_axis, fs, tp_baseline_ii)
+        
+        # OVERRIDE: Use user's comprehensive metrics if available
+        if user_metrics["qrs_duration"] is not None:
+            qrs_duration_raw = user_metrics["qrs_duration"]
         # OPTIMIZED: Reduced print frequency for better performance
         if not hasattr(self, '_qrs_print_count'):
             self._qrs_print_count = 0
@@ -2054,6 +2088,10 @@ class ECGTestPage(QWidget):
         
         # REAL MODE: Calculate QT Interval from median beat using clinical tangent method
         qt_interval_raw = measure_qt_from_median_beat(median_beat_ii, time_axis, fs, tp_baseline_ii, rr_ms=rr_ms)
+        
+        # OVERRIDE: Use user's comprehensive metrics if available
+        if user_metrics["qt_interval"] is not None:
+            qt_interval_raw = user_metrics["qt_interval"]
         # Stabilization: hold last good QT if new one fails
         if qt_interval_raw is None or qt_interval_raw <= 0:
             qt_interval_raw = getattr(self, 'last_qt_interval', 0)
@@ -2063,7 +2101,7 @@ class ECGTestPage(QWidget):
             self._qt_smooth_buffer = []
         if qt_interval_raw > 0:
             self._qt_smooth_buffer.append(qt_interval_raw)
-            if len(self._qt_smooth_buffer) > 7:
+            if len(self._qt_smooth_buffer) > 20:  # Increased from 7 to 20 for better stability
                 self._qt_smooth_buffer.pop(0)
         
         if len(self._qt_smooth_buffer) > 0:
@@ -2080,26 +2118,37 @@ class ECGTestPage(QWidget):
             self._pending_qt_start_time = 0
         
         qt_diff = abs(smoothed_qt - self._last_displayed_qt)
-        if qt_diff <= 15:  # Small change: update immediately (allow ±15 ms jitter for QT)
+        
+        # DEAD ZONE: Only update if change is > 5ms to prevent flickering
+        if qt_diff <= 5:
+            # Change too small: Keep old value
+            qt_interval = self._last_displayed_qt
+            self._pending_qt_value = None
+        elif qt_diff <= 15:  # Small change: update immediately (allow ±15 ms jitter for QT)
             self._last_displayed_qt = smoothed_qt
             self._pending_qt_value = None
+            qt_interval = smoothed_qt
         else:
             # Large change: hold old value until new value is stable
             current_time = time.time()
             if self._pending_qt_value is None:
                 self._pending_qt_value = smoothed_qt
                 self._pending_qt_start_time = current_time
+                qt_interval = self._last_displayed_qt
             else:
                 if abs(smoothed_qt - self._pending_qt_value) <= 10:  # Allow ±10 ms jitter
                     if current_time - self._pending_qt_start_time >= 3.0:  # Stable for 3 seconds
                         self._last_displayed_qt = smoothed_qt
                         self._pending_qt_value = None
+                        qt_interval = smoothed_qt
+                    else:
+                        qt_interval = self._last_displayed_qt
                 else:
                     # Value changed again, reset timer
                     self._pending_qt_value = smoothed_qt
                     self._pending_qt_start_time = current_time
-        
-        qt_interval = self._last_displayed_qt
+                    qt_interval = self._last_displayed_qt
+
         self.last_qt_interval = qt_interval
         
         # Calculate QTc (Bazett) using formula from standalone script: QTc = (QT/1000) / sqrt(RR) * 1000
@@ -2109,12 +2158,16 @@ class ECGTestPage(QWidget):
             qtc_interval_raw = (qt_interval / 1000.0) / np.sqrt(RR) * 1000.0
             qtc_interval_raw = int(round(qtc_interval_raw))
             
+            # OVERRIDE: Use user's comprehensive metrics if available
+            if user_metrics["qtc_interval"] is not None:
+                qtc_interval_raw = user_metrics["qtc_interval"]
+            
             # STABILIZATION: Smooth QTc with buffer
             if not hasattr(self, '_qtc_smooth_buffer'):
                 self._qtc_smooth_buffer = []
             if qtc_interval_raw > 0:
                 self._qtc_smooth_buffer.append(qtc_interval_raw)
-                if len(self._qtc_smooth_buffer) > 7:
+                if len(self._qtc_smooth_buffer) > 20:  # Increased from 7 to 20 for better stability
                     self._qtc_smooth_buffer.pop(0)
             
             if len(self._qtc_smooth_buffer) > 0:
@@ -2131,26 +2184,37 @@ class ECGTestPage(QWidget):
                 self._pending_qtc_start_time = 0
             
             qtc_diff = abs(smoothed_qtc - self._last_displayed_qtc)
-            if qtc_diff <= 15:  # Small change: update immediately (allow ±15 ms jitter for QTc)
+            
+            # DEAD ZONE: Only update if change is > 5ms to prevent flickering
+            if qtc_diff <= 5:
+                # Change too small: Keep old value
+                qtc_interval = self._last_displayed_qtc
+                self._pending_qtc_value = None
+            elif qtc_diff <= 15:  # Small change: update immediately (allow ±15 ms jitter for QTc)
                 self._last_displayed_qtc = smoothed_qtc
                 self._pending_qtc_value = None
+                qtc_interval = smoothed_qtc
             else:
                 # Large change: hold old value until new value is stable
                 current_time = time.time()
                 if self._pending_qtc_value is None:
                     self._pending_qtc_value = smoothed_qtc
                     self._pending_qtc_start_time = current_time
+                    qtc_interval = self._last_displayed_qtc
                 else:
                     if abs(smoothed_qtc - self._pending_qtc_value) <= 10:  # Allow ±10 ms jitter
                         if current_time - self._pending_qtc_start_time >= 3.0:  # Stable for 3 seconds
                             self._last_displayed_qtc = smoothed_qtc
                             self._pending_qtc_value = None
+                            qtc_interval = smoothed_qtc
+                        else:
+                            qtc_interval = self._last_displayed_qtc
                     else:
                         # Value changed again, reset timer
                         self._pending_qtc_value = smoothed_qtc
                         self._pending_qtc_start_time = current_time
-            
-            qtc_interval = self._last_displayed_qtc
+                        qtc_interval = self._last_displayed_qtc
+
             
             # Validation: QTc should be in reasonable range (300-500 ms typically)
             if qtc_interval < 250 or qtc_interval > 600:
@@ -4591,7 +4655,7 @@ class ECGTestPage(QWidget):
         fig = Figure(facecolor='#fff')  # White background for the figure
         ax = fig.add_subplot(111)
         ax.set_facecolor('#fff')        # White background for the axes
-        line, = ax.plot([], [], color=color, lw=2)
+        line, = ax.plot([], [], color=color, lw=0.7)
         canvas = FigureCanvas(fig)
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(canvas)
@@ -5471,10 +5535,10 @@ class ECGTestPage(QWidget):
                 print(f" Failed to connect to port {port_to_use}: {e}")
                 raise e
             
-            # OPTIMIZED: Timer interval for smooth wave display without jitter
-            # At 500 Hz, we get 500 packets/second = ~8-10 packets per 16ms timer interval
-            # Using 16ms (60 FPS) for smooth, jitter-free wave flow
-            timer_interval = 33  # 30 FPS - smooth flow without jitter
+            # OPTIMIZED: Timer interval for smooth wave display matching standalone script (50Hz)
+            # At 500 Hz, we get 500 packets/second = 10 packets per 20ms timer interval
+            # Using 20ms (50 FPS) for smooth, jitter-free wave flow matching standalone plotting
+            timer_interval = 20  # 50 FPS - matches standalone script
             # Using default timer type - works fine in EXE with proper interval
             self.timer.start(timer_interval)
             # INSTANT DISPLAY: Trigger immediate first update to show waves right away
@@ -6699,7 +6763,7 @@ class ECGTestPage(QWidget):
             ax.set_ylabel(lead, color='#00ff00', fontsize=12, fontweight='bold', labelpad=5)
             
             # Create line with initial data
-            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=1.5)
+            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=0.7)
             line.set_clip_on(False)
             self._overlay_axes.append(ax)
             self._overlay_lines.append(line)
@@ -7487,7 +7551,7 @@ class ECGTestPage(QWidget):
             ax.set_ylabel(lead, color='#00ff00', fontsize=12, fontweight='bold', labelpad=12)
             
             # Create line with initial data
-            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=1.5)
+            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=0.7)
             line.set_clip_on(False)
             self._overlay_axes.append(ax)
             self._overlay_lines.append(line)
@@ -7507,7 +7571,7 @@ class ECGTestPage(QWidget):
             ax.set_ylabel(lead, color='#00ff00', fontsize=12, fontweight='bold', labelpad=12)
             
             # Create line with initial data
-            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=1.5)
+            line, = ax.plot(np.arange(self.buffer_size), [np.nan]*self.buffer_size, color="#00ff00", lw=0.7)
             line.set_clip_on(False)
             self._overlay_axes.append(ax)
             self._overlay_lines.append(line)
@@ -7689,6 +7753,16 @@ class ECGTestPage(QWidget):
         if hasattr(self, '_overlay_canvas'):
             self._overlay_canvas.draw_idle()
 
+    def interpolate(self, signal, factor):
+        x = np.arange(len(signal))
+        xi = np.linspace(0, len(signal) - 1, len(signal) * factor)
+        return np.interp(xi, x, signal)
+
+    def set_display_mode(self, mode):
+        """Set the display mode: 'scroll' or 'sweep'"""
+        if mode in ['scroll', 'sweep']:
+            self.display_mode = mode
+
     def update_plots(self):
         """Update all ECG plots with current data using PyQtGraph (GitHub version)"""
         try:
@@ -7713,6 +7787,15 @@ class ECGTestPage(QWidget):
                     try:
                         if i < len(self.data):
                             raw = np.asarray(self.data[i])
+                            
+                            # --- PIPELINE STEP 1: 50Hz Notch Filter ---
+                            try:
+                                if len(raw) > 30: # Only filter if enough data
+                                    raw = filtfilt(self.b_notch, self.a_notch, raw)
+                            except Exception as e:
+                                pass
+                            # ------------------------------------------
+
                             gain = 1.0
                             try:
                                 gain = get_display_gain(self.settings_manager.get_wave_gain())
@@ -7754,7 +7837,35 @@ class ECGTestPage(QWidget):
                                 except Exception:
                                     fs = 500
                             window_len = int(max(50, min(len(raw), seconds_to_show * fs)))
-                            src = raw[-window_len:]
+                            
+                            # Handle Display Mode: Scroll vs Sweep
+                            if getattr(self, 'display_mode', 'scroll') == 'sweep' and len(raw) >= window_len:
+                                # Sweep Mode: Simulate moving bar
+                                # Use time-based cursor for smooth sweeping
+                                cursor = int(time.time() * fs) % window_len
+                                
+                                # Take the last window_len samples (the current window of data)
+                                raw_window = raw[-window_len:]
+                                
+                                # Shift to align newest data (at end of raw_window) to cursor
+                                # shift = cursor - (window_len - 1)
+                                src = np.roll(raw_window, cursor - (window_len - 1))
+                                
+                                # Insert a small gap of NaNs at the cursor to visualize the sweep bar
+                                gap_size = int(0.05 * fs) # 50ms gap
+                                if gap_size > 0:
+                                    # Create a gap AHEAD of the cursor (the "erase bar")
+                                    # Clear data from cursor to cursor + gap
+                                    gap_end = min(len(src), cursor + gap_size)
+                                    src[cursor:gap_end] = np.nan
+                                    
+                                    # If gap wraps around
+                                    if cursor + gap_size > len(src):
+                                        rem = (cursor + gap_size) - len(src)
+                                        src[:rem] = np.nan 
+                            else:
+                                # Scroll Mode (Default): Show the most recent data
+                                src = raw[-window_len:]
 
                             display_len = self.buffer_size if hasattr(self, 'buffer_size') else 1000
                             # --- Flatline detection (display-only) ---
@@ -7783,35 +7894,25 @@ class ECGTestPage(QWidget):
                             if src.size < 2:
                                 resampled = np.zeros(display_len)
                             else:
-                                # Apply smoothing to source data BEFORE interpolation for smoother waves
+                                # --- PIPELINE STEP 2: Gaussian Smoothing ---
                                 try:
-                                    from scipy.ndimage import gaussian_filter1d
                                     if len(src) > 5:
-                                        # Smooth source data first (sigma=1.5) to reduce jitter and ensure smooth flow
-                                        src = gaussian_filter1d(src, sigma=1.5)
-                                except ImportError:
-                                    # Fallback: simple moving average if scipy not available
-                                    if len(src) > 5:
-                                        kernel_size = 5
-                                        kernel = np.ones(kernel_size) / kernel_size
-                                        src = np.convolve(src, kernel, mode='same')
-                                
-                                x_src = np.linspace(0.0, 1.0, src.size)
-                                x_dst = np.linspace(0.0, 1.0, display_len)
-                                resampled = np.interp(x_dst, x_src, src)
-                            
-                            # Apply additional smoothing AFTER interpolation for very smooth waves in 12-lead view
-                            try:
-                                from scipy.ndimage import gaussian_filter1d
-                                if len(resampled) > 5:
-                                    # Additional smoothing (sigma=2.0) after interpolation for maximum smoothness and jitter-free flow
-                                    resampled = gaussian_filter1d(resampled, sigma=2.0)
-                            except ImportError:
-                                # Fallback: simple moving average if scipy not available
-                                if len(resampled) > 5:
-                                    kernel_size = 5
-                                    kernel = np.ones(kernel_size) / kernel_size
-                                    resampled = np.convolve(resampled, kernel, mode='same')
+                                        # Use standard sigma=0.8 from standalone script
+                                        src = gaussian_filter1d(src, sigma=self.SMOOTH_SIGMA)
+                                except Exception:
+                                    pass
+                                # -------------------------------------------
+
+                                # --- PIPELINE STEP 3: Interpolation ---
+                                try:
+                                    # Use fixed factor interpolation (4x) for high-res smoothness
+                                    resampled = self.interpolate(src, self.INTERP_FACTOR)
+                                except Exception:
+                                    # Fallback to display_len if helper fails
+                                    x_src = np.linspace(0.0, 1.0, src.size)
+                                    x_dst = np.linspace(0.0, 1.0, display_len)
+                                    resampled = np.interp(x_dst, x_src, src)
+                                # --------------------------------------
                             
                             # Center the wave: baseline stays at 2048/-2048, only variations (peaks) grow with gain
                             # Apply offset AFTER gain so baseline position is fixed, only amplitude variations scale
@@ -7821,7 +7922,12 @@ class ECGTestPage(QWidget):
                             else:
                                 resampled = resampled + 2048  # Center baseline at 2048 for other leads
 
-                            self.data_lines[i].setData(resampled)
+                            # Generate X-axis to ensure correct time scaling on the 0-10s plot
+                            # We map the data to [0, seconds_to_show]
+                            x_axis = np.linspace(0, seconds_to_show, len(resampled))
+                            
+                            # Use connect='finite' to handle NaNs (breaks the line at gaps)
+                            self.data_lines[i].setData(x_axis, resampled, connect='finite')
                             self.update_plot_y_range(i)
                     except Exception as e:
                         print(f" Error updating plot {i}: {e}")
@@ -7830,7 +7936,7 @@ class ECGTestPage(QWidget):
 
             # SERIAL branch - NEW PACKET-BASED PARSING
             packets_processed = 0
-            # At 500 Hz with 33ms timer interval, we need to read ~16-17 packets per cycle
+            # At 500 Hz with 20ms timer interval, we need to read 10 packets per cycle
             # CRITICAL: Increase max_packets to allow catching up if we fall behind
             # Process more packets per cycle to prevent buffer accumulation and packet loss
             max_packets = 100  # Increased from 50 to process more packets and catch up faster
@@ -7911,9 +8017,8 @@ class ECGTestPage(QWidget):
                                     value = packet[lead_name]
                                     # Update circular buffer
                                     self.data[i] = np.roll(self.data[i], -1)
-                                    # Apply smoothing
-                                    smoothed_value = self.apply_realtime_smoothing(value, i)
-                                    self.data[i][-1] = smoothed_value
+                                    # Store raw data (filtering happens during display)
+                                    self.data[i][-1] = value
                             except Exception as e:
                                 print(f" Error updating data buffer {i} ({lead_name}): {e}")
                                 continue
@@ -7974,8 +8079,8 @@ class ECGTestPage(QWidget):
                                 try:
                                     if i < len(self.data) and i < len(all_12_leads):
                                         self.data[i] = np.roll(self.data[i], -1)
-                                        smoothed_value = self.apply_realtime_smoothing(all_12_leads[i], i)
-                                        self.data[i][-1] = smoothed_value
+                                        # Store raw data (filtering happens during display)
+                                        self.data[i][-1] = all_12_leads[i]
                                 except Exception as e:
                                     print(f" Error updating data buffer {i}: {e}")
                                     continue
@@ -8063,10 +8168,32 @@ class ECGTestPage(QWidget):
                                 # All zeros - use recent samples anyway for instant display
                                 recent_data = raw_data[-min(100, len(raw_data)):]
                             
-                            if len(recent_data) > samples_to_show:
-                                data_slice = recent_data[-samples_to_show:]
+                            # Handle Display Mode: Scroll vs Sweep
+                            display_mode = getattr(self, 'display_mode', 'scroll')
+                            
+                            if display_mode == 'sweep' and len(raw_data) >= samples_to_show:
+                                # Sweep Mode
+                                window_len = samples_to_show
+                                # Use time-based cursor for smooth sweeping
+                                cursor = int(time.time() * sampling_rate) % window_len
+                                
+                                raw_window = raw_data[-window_len:]
+                                # Shift to align newest data (at end of raw_window) to cursor
+                                src = np.roll(raw_window, cursor - (window_len - 1))
+                                
+                                # Insert gap
+                                gap_size = int(0.05 * sampling_rate)
+                                gap_end = min(len(src), cursor + gap_size)
+                                src[cursor:gap_end] = np.nan
+                                if cursor + gap_size > len(src):
+                                    src[:cursor + gap_size - len(src)] = np.nan
+                                
+                                data_slice = src
                             else:
-                                data_slice = recent_data
+                                if len(recent_data) > samples_to_show:
+                                    data_slice = recent_data[-samples_to_show:]
+                                else:
+                                    data_slice = recent_data
                             
                             # INSTANT DISPLAY: Always ensure we have data to display (even if just a few samples)
                             if len(data_slice) == 0:
@@ -8083,35 +8210,27 @@ class ECGTestPage(QWidget):
                                     self._baseline_alpha_slow = 0.0005  # Monitor-grade: ~4 sec time constant at 500 Hz
                                 
                                 if len(filtered_slice) > 0:
-                                    # INSTANT DISPLAY: For immediate plotting, use simple mean for first few samples
-                                    # This ensures waves appear instantly without waiting for 2 seconds of data
-                                    min_samples_for_baseline = int(0.5 * sampling_rate)  # 0.5 seconds for proper baseline (250 samples at 500Hz)
+                                    # Unified Baseline Correction (Steady State Immediately)
+                                    # User requested "steady state" behavior from t=0 to avoid wave distortion.
+                                    # We use the slow alpha (monitor-grade) immediately.
+                                    # The initial "snap" (anchor=0 check) handles the initial DC offset.
                                     
-                                    # INSTANT DISPLAY: Use simple mean for ANY amount of data initially (even 1 sample)
-                                    if len(filtered_slice) < min_samples_for_baseline:
-                                        # Use simple mean for instant display with minimal data (even just 1 sample)
-                                        baseline_estimate = np.nanmean(filtered_slice) if len(filtered_slice) > 0 else 0.0
-                                        # Initialize anchor immediately for instant display
-                                        if self._baseline_anchors[i] == 0.0:
-                                            # For very first sample, use the value directly (instant display)
-                                            self._baseline_anchors[i] = baseline_estimate
-                                        elif len(filtered_slice) < 10:
-                                            # For first few samples, fast convergence (80% new value for instant response)
-                                            self._baseline_anchors[i] = 0.2 * self._baseline_anchors[i] + 0.8 * baseline_estimate
-                                        else:
-                                            # For more samples but still < min_samples, moderate convergence
-                                            self._baseline_anchors[i] = 0.5 * self._baseline_anchors[i] + 0.5 * baseline_estimate
-                                    else:
-                                        # Use proper low-frequency extraction once we have enough data
-                                        baseline_estimate = self._extract_low_frequency_baseline(filtered_slice, sampling_rate)
-                                        # Update anchor with slow EMA (tracks only very-low-frequency drift)
-                                        self._baseline_anchors[i] = (1 - self._baseline_alpha_slow) * self._baseline_anchors[i] + self._baseline_alpha_slow * baseline_estimate
+                                    current_alpha = self._baseline_alpha_slow
+
+                                    # Extract baseline estimate (helper handles short signals via fallback to mean)
+                                    baseline_estimate = self._extract_low_frequency_baseline(filtered_slice, sampling_rate)
+                                    
+                                    # Initialize anchor immediately if zero (Snap to center on first frame)
+                                    if self._baseline_anchors[i] == 0.0:
+                                        self._baseline_anchors[i] = baseline_estimate
+                                    
+                                    # Update anchor with slow alpha (steady state tracking)
+                                    self._baseline_anchors[i] = (1 - current_alpha) * self._baseline_anchors[i] + current_alpha * baseline_estimate
                                     
                                     # Subtract anchor (NOT raw mean)
                                     filtered_slice = filtered_slice - self._baseline_anchors[i]
                                     
-                                    # Final zero-centering to ensure perfect centering before gain (so baseline stays fixed at 2048/-2048)
-                                    # This ensures that when we add 2048/-2048 after gain, the baseline position doesn't shift
+                                    # Final zero-centering to ensure perfect centering before gain
                                     current_dc = np.nanmean(filtered_slice) if len(filtered_slice) > 0 else 0.0
                                     filtered_slice = filtered_slice - current_dc
                             except Exception as filter_error:
@@ -8121,31 +8240,14 @@ class ECGTestPage(QWidget):
                             # Optional AC notch filtering based on "Set Filter" selection.
                             # Keeps wave peaks intact while removing 50/60 Hz power noise for machine serial data.
 
+                            # --- PIPELINE STEP 1: 50Hz Notch Filter (Standalone) ---
+                            # Matches standalone_ecg_plot.py configuration (w0=50.0, Q=30.0)
                             try:
-                                # EMG Filter
-                                emg_applied = False
-                                emg_suppresses_ac = False
-                                emg_setting = self.settings_manager.get_setting("filter_emg", "150") if self.settings_manager else "150"
-                                if emg_setting and emg_setting.lower() != "off" and len(filtered_slice) >= 10:
-                                    from ecg.ecg_filters import apply_emg_filter
-                                    filtered_slice = apply_emg_filter(filtered_slice, sampling_rate, emg_setting)
-                                    emg_applied = True
-                                    try:
-                                        if float(emg_setting) < 60:
-                                            emg_suppresses_ac = True
-                                    except ValueError:
-                                        pass
-                            except Exception as filter_error:
-                                pass  # EMG filter is optional
-
-                            try:
-                                # AC Filter
-                                ac_setting = self.settings_manager.get_setting("filter_ac", "50") if self.settings_manager else "off"
-                                if (not emg_applied or not emg_suppresses_ac) and ac_setting and ac_setting != "off" and len(filtered_slice) >= 10:
-                                    from ecg.ecg_filters import apply_ac_filter
-                                    filtered_slice = apply_ac_filter(filtered_slice, sampling_rate, ac_setting)
-                            except Exception as filter_error:
-                                pass  # AC filter is optional
+                                if len(filtered_slice) > 30:
+                                    filtered_slice = filtfilt(self.b_notch, self.a_notch, filtered_slice)
+                            except Exception:
+                                pass
+                            # -------------------------------------------------------
                             
                             # Apply wave gain to zero-centered signal (only amplifies variations, baseline stays at zero)
                             gain_factor = get_display_gain(self.settings_manager.get_wave_gain())
@@ -8174,6 +8276,19 @@ class ECGTestPage(QWidget):
                                     # Reset flag when signal returns
                                     self._flatline_alert_shown[i] = False
                             
+                            # --- PIPELINE STEP 2: Gaussian Smoothing (Standalone) ---
+                            try:
+                                if len(scaled_data) > 5:
+                                    scaled_data = gaussian_filter1d(scaled_data, sigma=self.SMOOTH_SIGMA)
+                            except Exception:
+                                pass
+
+                            # --- PIPELINE STEP 3: Interpolation (Standalone) ---
+                            try:
+                                scaled_data = self.interpolate(scaled_data, self.INTERP_FACTOR)
+                            except Exception:
+                                pass
+
                             # INSTANT DISPLAY: Always create time axis and plot, even with just 1 sample
                             n = len(scaled_data)
                             if n == 0:
@@ -8182,20 +8297,6 @@ class ECGTestPage(QWidget):
                                 n = 1
                             
                             time_axis = np.arange(n, dtype=float) / sampling_rate
-                            
-                            # Apply stronger smoothing for smooth wave appearance in 12-lead view
-                            try:
-                                from scipy.ndimage import gaussian_filter1d
-                                if len(scaled_data) > 5:
-                                    # Stronger Gaussian smoothing (sigma=1.2) for very smooth waves in 12-lead view
-                                    # This reduces jitter and makes waves appear as smooth as expanded view
-                                    scaled_data = gaussian_filter1d(scaled_data, sigma=1.2)
-                            except (ImportError, Exception):
-                                # Fallback: simple moving average if scipy not available
-                                if len(scaled_data) > 5:
-                                    kernel_size = 7
-                                    kernel = np.ones(kernel_size) / kernel_size
-                                    scaled_data = np.convolve(scaled_data, kernel, mode='same')
                             
                             # Center the wave: add 2048 for non-AVR leads, add -2048 for AVR
                             lead_name = self.leads[i] if i < len(self.leads) else ""

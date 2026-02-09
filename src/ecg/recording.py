@@ -569,6 +569,7 @@ class ECGMenu(QGroupBox):
     def on_exit(self):
         self.show_exit()
 
+
     def create_scrollable_content(self, content_widget):
         from PyQt5.QtWidgets import QScrollArea
         
@@ -2571,7 +2572,7 @@ class ECGMenu(QGroupBox):
                 # Plot the data in sliding window
                 x_data = range(start_idx, end_idx)
                 y_data = df[lead].iloc[start_idx:end_idx]
-                axes[idx].plot(x_data, y_data, linewidth=1.2, color='#1f77b4') 
+                axes[idx].plot(x_data, y_data, linewidth=0.7, color='#1f77b4') 
                 
                 # Add current position indicator
                 if current_index < len(df):

@@ -9,7 +9,7 @@ from collections import deque
 _bpm_smoothing_buffers = {}  # Key: instance_id, Value: deque buffer
 _bpm_ema_values = {}  # Key: instance_id, Value: EMA value
 _last_stable_bpm = {}  # Key: instance_id, Value: Last stable BPM value
-
+_bpm_candidate_values = {} # Key: instance_id, Value: (candidate_bpm, count)
 
 def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None, instance_id=None):
     """Calculate heart rate from Lead II data using R-R intervals
@@ -200,7 +200,7 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
                 print(" Invalid heart rate calculated")
                 return 60
             
-            # ENHANCED BPM SMOOTHING: Prevent flickering between 99-101 BPM
+            # ENHANCED BPM SMOOTHING: Prevent flickering and abrupt jumps
             hr_int = int(round(heart_rate))
             
             # Use instance_id for per-instance smoothing (or default to 'global')
@@ -208,7 +208,44 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
             
             # Initialize smoothing buffer (larger buffer for better stability)
             if buffer_key not in _bpm_smoothing_buffers:
-                _bpm_smoothing_buffers[buffer_key] = deque(maxlen=20)  # Increased from 15 to 20 for better stability
+                _bpm_smoothing_buffers[buffer_key] = deque(maxlen=30)  # Increased for better stability
+            
+            # Initialize last stable if needed
+            if buffer_key not in _last_stable_bpm:
+                _last_stable_bpm[buffer_key] = hr_int
+                
+            last_stable = _last_stable_bpm[buffer_key]
+            
+            # --- JUMP STABILIZATION LOGIC ---
+            # If BPM changes significantly (>20 BPM), require confirmation to prevent spikes
+            # This filters out transient "double counting" artifacts during rhythm changes
+            is_large_jump = abs(hr_int - last_stable) > 20
+            
+            if is_large_jump:
+                # Get candidate info
+                cand_bpm, cand_count = _bpm_candidate_values.get(buffer_key, (None, 0))
+                
+                # If this matches the candidate (within 10 BPM), increment count
+                if cand_bpm is not None and abs(hr_int - cand_bpm) <= 10:
+                    cand_count += 1
+                    # Update candidate to latest value
+                    cand_bpm = hr_int
+                else:
+                    # New candidate
+                    cand_bpm = hr_int
+                    cand_count = 1
+                
+                _bpm_candidate_values[buffer_key] = (cand_bpm, cand_count)
+                
+                # Only accept if seen 3 times (suppress single/double frame spikes)
+                if cand_count < 3:
+                    # Return previous stable value while verifying
+                    return last_stable
+                
+                # If confirmed, we proceed to add to buffer
+            else:
+                # Reset candidate if we are close to stable
+                _bpm_candidate_values[buffer_key] = (None, 0)
             
             buffer = _bpm_smoothing_buffers[buffer_key]
             buffer.append(hr_int)
@@ -223,26 +260,18 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
             else:
                 median_hr = hr_int
             
-            # Apply EMA (Exponential Moving Average) with alpha=0.1 for very stable updates
-            # Lower alpha = more stable, higher alpha = more responsive
-            alpha = 0.1  # 10% new value, 90% old value (very stable)
+            # Apply EMA (Exponential Moving Average) with alpha=0.1
+            alpha = 0.1
             _bpm_ema_values[buffer_key] = (1 - alpha) * _bpm_ema_values[buffer_key] + alpha * median_hr
             
             smoothed_hr = int(round(_bpm_ema_values[buffer_key]))
             
-            # Final stability check: Only update if change is ≥3 BPM (prevents 98-103 flicker)
-            # This creates a "dead zone" where small fluctuations are ignored
-            if buffer_key not in _last_stable_bpm:
-                _last_stable_bpm[buffer_key] = smoothed_hr
-            
-            last_stable = _last_stable_bpm[buffer_key]
-            
-            # Only update if change is significant (≥3 BPM difference) for better stability
-            if abs(smoothed_hr - last_stable) >= 3:
+            # Final stability check: Only update if change is significant (≥2 BPM)
+            if abs(smoothed_hr - last_stable) >= 2:
                 _last_stable_bpm[buffer_key] = smoothed_hr
                 return smoothed_hr
             else:
-                # Keep previous stable value if change is too small (prevents flickering)
+                # Keep previous stable value
                 return last_stable
             
         except Exception as e:

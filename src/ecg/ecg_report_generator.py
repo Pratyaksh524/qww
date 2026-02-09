@@ -736,6 +736,25 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
     height_mm_physical = 60.0  # ±3 mV at 10 mm/mV
 
     ecg_array = np.asarray(ecg_data, dtype=float)
+    
+    # STEADY-STATE BASELINE CORRECTION (Same as Dashboard Lead 2)
+    try:
+        from ecg.signal.signal_processing import extract_low_frequency_baseline
+        # Determine sampling rate (default 500 if not found)
+        current_fs = 500.0
+        if 'computed_sampling_rate' in globals():
+            current_fs = float(globals().get('computed_sampling_rate', current_fs))
+            
+        if len(ecg_array) > 0:
+            baseline_val = extract_low_frequency_baseline(ecg_array, current_fs)
+            ecg_array = ecg_array - baseline_val
+            # Final zero-centering
+            ecg_array = ecg_array - np.mean(ecg_array)
+    except Exception as e:
+        print(f" Baseline correction error: {e}")
+        if len(ecg_array) > 0:
+            ecg_array = ecg_array - np.nanmean(ecg_array)
+
     med_abs = np.nanmedian(np.abs(ecg_array)) if len(ecg_array) else 0.0
     ecg_mv = ecg_array / 1000.0 if med_abs > 20.0 else ecg_array
 

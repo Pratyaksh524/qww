@@ -608,9 +608,23 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         # Convert to numpy array
         adc_data = np.array(ecg_data, dtype=float)
         
-        # Apply baseline 2000 (subtract baseline from ADC values)
-        baseline_adc = 2000.0
+        # STEADY-STATE BASELINE CORRECTION (Same as Dashboard Lead 2)
+        try:
+            from ecg.signal.signal_processing import extract_low_frequency_baseline
+            # Use calculated baseline instead of hardcoded 2000.0
+            if len(adc_data) > 0:
+                baseline_adc = extract_low_frequency_baseline(adc_data, 500.0)
+            else:
+                baseline_adc = 2000.0
+        except Exception as e:
+            print(f" Baseline correction error: {e}")
+            baseline_adc = 2000.0
+            
         centered_adc = adc_data - baseline_adc
+        
+        # Additional zero-centering to ensure it sits exactly on the line
+        if len(centered_adc) > 0:
+            centered_adc = centered_adc - np.mean(centered_adc)
         
         # Calculate ADC per box based on wave_gain and lead-specific multiplier
         adc_per_box = adc_per_box_multiplier / max(1e-6, wave_gain_mm_mv)  # Avoid division by zero

@@ -486,6 +486,13 @@ class Dashboard(QWidget):
         self.chatbot_btn.clicked.connect(self.open_chatbot_dialog)
         self.chatbot_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         greet_row.addWidget(self.chatbot_btn)
+        
+        # --- Add Analysis Window Button ---
+        self.analysis_btn = QPushButton("Analysis Window")
+        self.analysis_btn.setStyleSheet("background: #28a745; color: white; border-radius: 16px; padding: 8px 24px;")
+        self.analysis_btn.clicked.connect(self.open_analysis_window)
+        self.analysis_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        greet_row.addWidget(self.analysis_btn)
 
         dashboard_layout.addLayout(greet_row)
 
@@ -1049,7 +1056,7 @@ class Dashboard(QWidget):
         # --- ECG Animation Setup ---
         self.ecg_x = np.linspace(0, 2, 500)
         self.ecg_y = 150 * np.sin(2 * np.pi * 2 * self.ecg_x) + 30 * np.random.randn(500)  # Smaller amplitude to prevent cropping
-        self.ecg_line, = self.ecg_canvas.axes.plot(self.ecg_x, self.ecg_y, color="#ff6600", linewidth=0.5, antialiased=False)
+        self.ecg_line, = self.ecg_canvas.axes.plot(self.ecg_x, self.ecg_y, color="#ff6600", linewidth=0.5, antialiased=True)
         # Reduce CPU/GPU usage: lower refresh rate slightly and disable frame caching
         self.anim = FuncAnimation(
             self.ecg_canvas.figure,
@@ -1352,6 +1359,18 @@ class Dashboard(QWidget):
             print(f"Error applying calendar selection: {e}")
             dialog.reject()
 
+    def open_analysis_window(self):
+        """Open the ECG Analysis Window"""
+        try:
+            from dashboard.analysis_window import ECGAnalysisWindow
+            self.analysis_window = ECGAnalysisWindow(self)
+            self.analysis_window.show()
+            print("✅ ECG Analysis Window opened successfully")
+        except ImportError as e:
+            QMessageBox.critical(self, "Error", f"Failed to import Analysis Window: {str(e)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Analysis Window: {str(e)}")
+    
     def open_chatbot_dialog(self):
         dlg = ChatbotDialog(self)
         dlg.exec_()
@@ -2471,6 +2490,26 @@ class Dashboard(QWidget):
                         print(f" Error converting Lead II data to array: {e}")
                         return self._fallback_wave_update(frame)
                     
+                    # Apply filters matching 12-lead page (smoothness)
+                    try:
+                        from ecg.ecg_filters import apply_ecg_filters_from_settings
+                        
+                        # Use settings to match 12-lead page configuration
+                        original_data = apply_ecg_filters_from_settings(
+                            original_data,
+                            sampling_rate=actual_sampling_rate,
+                            settings_manager=self.settings_manager
+                        )
+                        
+                        # Apply Gaussian smoothing (same as 12-lead page)
+                        # SMOOTH_SIGMA = 0.8 from twelve_lead_test.py
+                        original_data = gaussian_filter1d(original_data, sigma=0.8)
+                        
+                        # print(" Applied filters (Settings + Gaussian) to Lead II data")
+                    except Exception as e:
+                        print(f" Warning: Could not apply filters: {e}")
+                        # Continue without filtering if there's an error
+                    
                     # Check for invalid values
                     if np.any(np.isnan(original_data)) or np.any(np.isinf(original_data)):
                         print(" Invalid values (NaN/Inf) in Lead II data")
@@ -2507,14 +2546,45 @@ class Dashboard(QWidget):
                     window_samples = int(max(50, min(len(original_data), seconds_to_show * actual_sampling_rate)))
 
                     # Slice last window and resample horizontally to fixed display length
-                    # Use same approach as 12-lead test page: plot raw data directly in 0-4096 range
                     try:
                         src = original_data[-window_samples:]
                         
-                        # Use raw data directly (same as 12-lead test page)
-                        # Raw ECG data is already in 0-4096 range from hardware
-                        # No centering or scaling needed - plot directly like in 12-lead page
-                        
+                        # STEADY-STATE BASELINE CORRECTION (Same as 12-Lead Page)
+                        try:
+                            # Use simple centering if import fails or just as fallback
+                            # Ideally we would replicate the exact filter, but centering is usually sufficient for Lead II view
+                            # unless we can import the helper.
+                            from ecg.signal.signal_processing import extract_low_frequency_baseline
+                            
+                            # Initialize anchor if needed (persistent for smooth transitions)
+                            if not hasattr(self, '_lead2_baseline_anchor'):
+                                self._lead2_baseline_anchor = 0.0
+                                self._lead2_baseline_alpha = 0.0005  # Monitor-grade (slow)
+                            
+                            if len(src) > 0:
+                                # Extract baseline estimate using the same logic as 12-lead page
+                                # Note: We need sampling rate, using actual_sampling_rate from above
+                                baseline_estimate = extract_low_frequency_baseline(src, actual_sampling_rate)
+                                
+                                # Initialize anchor immediately if zero (snap to center)
+                                if self._lead2_baseline_anchor == 0.0:
+                                    self._lead2_baseline_anchor = baseline_estimate
+                                
+                                # Update anchor with slow alpha
+                                self._lead2_baseline_anchor = (1 - self._lead2_baseline_alpha) * self._lead2_baseline_anchor + self._lead2_baseline_alpha * baseline_estimate
+                                
+                                # Subtract anchor
+                                src = src - self._lead2_baseline_anchor
+                                
+                                # Final zero-centering to ensure it sits on the line
+                                current_dc = np.nanmean(src) if len(src) > 0 else 0.0
+                                src = src - current_dc
+                                
+                        except Exception as e:
+                            # Fallback: simple mean subtraction
+                            if len(src) > 0:
+                                src = src - np.nanmean(src)
+
                         display_len = len(self.ecg_x)
                         if src.size <= 1:
                             # Default to middle of range if no data
