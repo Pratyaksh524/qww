@@ -258,10 +258,18 @@ class SmoothLeadBuffer:
             filtered = self.filt.process(arr)
             self.filtered_buffer.extend(filtered.tolist())
             self._baseline_buffer.extend(filtered.tolist())
+<<<<<<< Updated upstream
             # Update rolling baseline (very slow — only for vertical centering)
             if len(self._baseline_buffer) > 50:
                 self._display_baseline = float(np.median(
                     list(self._baseline_buffer)[-int(self.fs * 0.5):]
+=======
+            # Update rolling baseline (slow median for vertical centering)
+            # Longer window (1.5s) for stability at high BPM (>130)
+            if len(self._baseline_buffer) > 50:
+                self._display_baseline = float(np.median(
+                    list(self._baseline_buffer)[-int(self.fs * 1.5):]
+>>>>>>> Stashed changes
                 ))
 
         # Advance write position
