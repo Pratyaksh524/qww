@@ -47,6 +47,37 @@ else:
         def send_version_command(self): return (False, None, None)
         def send_close_command(self): return (False, None)
 
+class GlobalHardwareManager:
+    """Singleton to manage a single shared serial connection across the app"""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(GlobalHardwareManager, cls).__new__(cls)
+            cls._instance.reader = None
+        return cls._instance
+
+    def get_reader(self, port=None, baudrate=None):
+        """Get or create the shared serial reader"""
+        if self.reader is None:
+            if port and baudrate:
+                self.reader = SerialStreamReader(port, baudrate)
+            else:
+                return None
+        
+        # If port changed, close old and open new
+        elif port and self.reader.ser.port != port:
+            self.reader.close()
+            self.reader = SerialStreamReader(port, baudrate)
+            
+        return self.reader
+
+    def close_reader(self):
+        """Explicitly close and destroy the reader"""
+        if self.reader:
+            self.reader.close()
+            self.reader = None
+            
 
 class SerialStreamReader:
     """Packet-based serial reader for ECG data - NEW IMPLEMENTATION"""
@@ -273,29 +304,43 @@ class SerialStreamReader:
             print("=" * 60 + "\n")
             return None
 
-    def start(self):
+    def start(self, skip_hardware_start=False):
         """Start data acquisition using packet‑based protocol + hardware START command."""
         print(" Starting packet-based ECG data acquisition...")
+
+        if self.running and not self.ser.is_open:
+            # If we think we are running but port is closed, reset state
+            self.running = False
 
         # Get current port info
         current_port = self.ser.port if hasattr(self.ser, "port") else None
         current_baudrate = self.ser.baudrate if hasattr(self.ser, "baudrate") else 115200
         current_port_open = self.ser.is_open if hasattr(self.ser, "is_open") else False
 
-        # Ensure port is open
-        if not current_port_open:
-            if current_port:
-                try:
+        # Ensure port is open and fresh
+        if not current_port_open or not self.running:
+            try:
+                if current_port_open:
+                    print(f"   🔄 Closing existing port {current_port} to ensure fresh handle...")
+                    self.ser.close()
+                
+                if current_port:
                     print(f"   🔄 Opening port {current_port} at {current_baudrate} baud...")
-                    self.ser = serial.Serial(
-                        port=current_port,
-                        baudrate=current_baudrate,
-                        timeout=0.1,
-                    )
+                    # Re-initialize serial port object to ensure fresh state
+                    self.ser.port = current_port
+                    self.ser.baudrate = current_baudrate
+                    self.ser.timeout = 0.1
+                    self.ser.open()
+                    
+                    # Re-initialize command handler with the opened port
+                    if SERIAL_AVAILABLE:
+                        self.command_handler = HardwareCommandHandler(self.ser)
                     print(f"   ✅ Port {current_port} opened")
-                except Exception as e:
-                    print(f"   ❌ Failed to open port {current_port}: {e}")
-                    raise RuntimeError(f"Cannot open port {current_port}: {e}")
+            except Exception as e:
+                print(f"   ❌ Failed to open/reopen port {current_port}: {e}")
+                # If we failed to reopen, ensure we don't think we're running
+                self.running = False
+                raise RuntimeError(f"Cannot open port {current_port}: {e}")
 
         # Verify port is open and ready
         if not self.ser.is_open:
@@ -308,6 +353,12 @@ class SerialStreamReader:
             self.buf.clear()
         except Exception as e:
             print(f" ⚠️ Warning: Could not clear buffers before START: {e}")
+
+        # If already running or requested to skip, don't send hardware commands
+        if skip_hardware_start or self.running:
+            print("   ⏩ Skipping hardware commands (already running or skip requested)")
+            self.running = True
+            return
 
         # First: optionally request and print device version while device is IDLE
         # (send STOP + VERSION, then we will START streaming below)
@@ -531,6 +582,14 @@ class SerialStreamReader:
                self.consecutive_errors > 20:
                 print(f" Critical serial error ({error_str}) - stopping acquisition")
                 self.running = False
+                
+                try:
+                    # Explicitly close the port on critical error to allow fresh start
+                    if self.ser and self.ser.is_open:
+                        self.ser.close()
+                        print(" Serial port closed due to critical error")
+                except Exception:
+                    pass
             
         return out
 

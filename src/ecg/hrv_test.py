@@ -399,10 +399,12 @@ class HRVTestWindow(QWidget):
                 return
         
         try:
-            
-            # Initialize serial reader using SerialStreamReader (new packet-based logic)
-            # This reads lead II directly from packets
-            self.serial_reader = SerialStreamReader(port_to_use, baudrate)
+            # Use GlobalHardwareManager to get the shared SerialStreamReader
+            from ecg.serial.serial_reader import GlobalHardwareManager
+            self.serial_reader = GlobalHardwareManager().get_reader(port_to_use, baudrate)
+
+            # Start/Resume acquisition. The start() method now handles 
+            # skipping hardware commands if already running.
             self.serial_reader.start()
             
             # Reset data - use HISTORY_LENGTH for sufficient buffer size
@@ -460,13 +462,10 @@ class HRVTestWindow(QWidget):
         
         if self.serial_reader:
             try:
-                # Use the proper stop/close sequence from SerialECGReader
-                stop_method = getattr(self.serial_reader, "stop", None)
-                close_method = getattr(self.serial_reader, "close", None)
-                if callable(stop_method):
-                    stop_method()
-                if callable(close_method):
-                    close_method()
+                # IMPORTANT: We don't close the shared reader here because other tests 
+                # (like 12-lead) might still be using it in the background.
+                # We just stop our reference to it.
+                pass
             except:
                 pass
             self.serial_reader = None
@@ -512,6 +511,15 @@ class HRVTestWindow(QWidget):
         """Update the plot with new data"""
         if not self.is_capturing or not self.serial_reader:
             return
+
+        # Check if device got disconnected suddenly
+        if not self.serial_reader.running:
+            print("⚠️ Device disconnected during HRV test!")
+            self.stop_capture()
+            QMessageBox.critical(self, "Test Failed", "Device disconnected. Test failed.")
+            self.close() # Return to dashboard
+            return
+            
         
         try:
             # Read multiple packets per GUI tick (same idea as 12‑lead test)

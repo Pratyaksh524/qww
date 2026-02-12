@@ -484,9 +484,12 @@ class HyperkalemiaTestWindow(QWidget):
                 return
         
         try:
-            # Initialize serial reader using SerialStreamReader (new packet-based logic)
-            # This reads lead II directly from packets
-            self.serial_reader = SerialStreamReader(port_to_use, baudrate)
+            # Use GlobalHardwareManager to get the shared SerialStreamReader
+            from ecg.serial.serial_reader import GlobalHardwareManager
+            self.serial_reader = GlobalHardwareManager().get_reader(port_to_use, baudrate)
+            
+            # Start/Resume acquisition. The start() method now handles 
+            # skipping hardware commands if already running.
             self.serial_reader.start()
             
             # Reset data for all leads
@@ -548,12 +551,9 @@ class HyperkalemiaTestWindow(QWidget):
         # Serial reader cleanup
         if self.serial_reader:
             try:
-                stop_method = getattr(self.serial_reader, "stop", None)
-                close_method = getattr(self.serial_reader, "close", None)
-                if callable(stop_method):
-                    stop_method()
-                if callable(close_method):
-                    close_method()
+                # IMPORTANT: We don't close the shared reader here because other tests 
+                # might still be using it in the background.
+                pass
             except:
                 pass
             self.serial_reader = None
@@ -598,6 +598,15 @@ class HyperkalemiaTestWindow(QWidget):
         """Update all plots with new data matching 12-lead dashboard style"""
         if not self.is_capturing or not self.serial_reader:
             return
+
+        # Check if device got disconnected suddenly
+        if not self.serial_reader.running:
+            print("⚠️ Device disconnected during Hyperkalemia test!")
+            self.stop_capture()
+            QMessageBox.critical(self, "Test Failed", "Device disconnected. Test failed.")
+            self.close() # Return to dashboard
+            return
+            
         
         try:
             elapsed = time.time() - self.start_time

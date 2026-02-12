@@ -1485,12 +1485,12 @@ class ECGMenu(QGroupBox):
                 'text': 'OK',
                 'action': self.save_working_mode_settings,
                 'style': 'primary'
-            },
-            {
-                'text': 'Cancel',
-                'action': self.hide_sliding_panel,
-                'style': 'danger'
             }
+            # {
+            #     'text': 'Cancel',
+            #     'action': self.hide_sliding_panel,
+            #     'style': 'danger'
+            # }
         ]
         
         return self.create_unified_control_panel("Working Mode Settings", sections, buttons)
@@ -1570,12 +1570,12 @@ class ECGMenu(QGroupBox):
                 'text': 'Save',
                 'action': self.save_report_settings,
                 'style': 'primary'
-            },
-            {
-                'text': 'Cancel',
-                'action': self.hide_sliding_panel,
-                'style': 'danger'
             }
+            # {
+            #     'text': 'Cancel',
+            #     'action': self.hide_sliding_panel,
+            #     'style': 'danger'
+            # }
         ]
         
         return self.create_unified_control_panel("Report Setup", sections, buttons)
@@ -1626,12 +1626,12 @@ class ECGMenu(QGroupBox):
                 'text': 'OK',
                 'action': self.apply_filter_settings,
                 'style': 'primary'
-            },
-            {
-                'text': 'Cancel',
-                'action': self.hide_sliding_panel,
-                'style': 'danger'
             }
+            # {
+            #     'text': 'Cancel',
+            #     'action': self.hide_sliding_panel,
+            #     'style': 'danger'
+            # }
         ]
         
         return self.create_unified_control_panel("Filter Settings", sections, buttons)
@@ -1683,12 +1683,12 @@ class ECGMenu(QGroupBox):
                 'text': 'Save',
                 'action': self.save_system_settings,
                 'style': 'primary'
-            },
-            {
-                'text': 'Cancel',
-                'action': self.hide_sliding_panel,
-                'style': 'danger'
             }
+            # {
+            #     'text': 'Cancel',
+            #     'action': self.hide_sliding_panel,
+            #     'style': 'danger'
+            # }
         ]
         
         return self.create_unified_control_panel("System Setup", sections, buttons)

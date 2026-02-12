@@ -4048,12 +4048,12 @@ class Dashboard(QWidget):
     def open_hyperkalemia_test(self):
         """Open Hyperkalemia Test window in a new window"""
         # Ensure 12-lead serial connection is closed before opening Hyperkalemia test
-        if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
-            try:
-                if hasattr(self.ecg_test_page, 'close_serial_connection'):
-                    self.ecg_test_page.close_serial_connection()
-            except Exception as e:
-                print(f"Error closing 12-lead serial connection: {e}")
+        # if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
+        #     try:
+        #         if hasattr(self.ecg_test_page, 'close_serial_connection'):
+        #             self.ecg_test_page.close_serial_connection()
+        #     except Exception as e:
+        #         print(f"Error closing 12-lead serial connection: {e}")
 
         try:
             from ecg.hyperkalemia_test import HyperkalemiaTestWindow
@@ -4074,13 +4074,13 @@ class Dashboard(QWidget):
     
     def open_hrv_test(self):
         """Open HRV Test window in a new window"""
-        # Ensure 12-lead serial connection is closed before opening HRV test
-        if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
-            try:
-                if hasattr(self.ecg_test_page, 'close_serial_connection'):
-                    self.ecg_test_page.close_serial_connection()
-            except Exception as e:
-                print(f"Error closing 12-lead serial connection: {e}")
+        # # Ensure 12-lead serial connection is closed before opening HRV test
+        # if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
+        #     try:
+        #         if hasattr(self.ecg_test_page, 'close_serial_connection'):
+        #             self.ecg_test_page.close_serial_connection()
+        #     except Exception as e:
+        #         print(f"Error closing 12-lead serial connection: {e}")
 
         try:
             from ecg.hrv_test import HRVTestWindow
@@ -4103,13 +4103,13 @@ class Dashboard(QWidget):
         # Also update dashboard metrics when opening ECG test page
         self.update_dashboard_metrics_from_ecg()
     def go_to_dashboard(self):
-        # Close serial connection on ECG page to free up COM port
-        if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
-            try:
-                if hasattr(self.ecg_test_page, 'close_serial_connection'):
-                    self.ecg_test_page.close_serial_connection()
-            except Exception as e:
-                print(f"Error closing serial connection: {e}")
+        # # Close serial connection on ECG page to free up COM port
+        # if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
+        #     try:
+        #         if hasattr(self.ecg_test_page, 'close_serial_connection'):
+        #             self.ecg_test_page.close_serial_connection()
+        #     except Exception as e:
+        #         print(f"Error closing serial connection: {e}")
 
                 
         self.page_stack.setCurrentWidget(self.dashboard_page)
@@ -4119,6 +4119,39 @@ class Dashboard(QWidget):
     # Resume device check if needed
     def check_device_connection(self):
         """Check for device connection or scan if disconnected"""
+
+        if not SERIAL_AVAILABLE:
+            return
+
+        # If device is already connected, check if it's still there
+        if self.device_connected and self.device_port:
+            try:
+                available_ports = [p.device for p in serial.tools.list_ports.comports()]
+                if self.device_port not in available_ports:
+                    print(f"⚠️ Port {self.device_port} disconnected.")
+                    self.device_connected = False
+                    self.device_port = None
+                    self.update_device_ui(False)
+
+                    # If HRV or Hyperkalemia test window is open, show "Test Failed" and close it
+                    if hasattr(self, 'hrv_window') and self.hrv_window and self.hrv_window.isVisible():
+                        if hasattr(self.hrv_window, 'stop_capture'):
+                            self.hrv_window.stop_capture()
+                        QMessageBox.critical(self.hrv_window, "Test Failed", "Device disconnected. Test failed.")
+                        self.hrv_window.close()
+                    elif hasattr(self, 'hyperkalemia_window') and self.hyperkalemia_window and self.hyperkalemia_window.isVisible():
+                        if hasattr(self.hyperkalemia_window, 'stop_capture'):
+                            self.hyperkalemia_window.stop_capture()
+                        QMessageBox.critical(self.hyperkalemia_window, "Test Failed", "Device disconnected. Test failed.")
+                        self.hyperkalemia_window.close()
+
+            except Exception:
+                pass
+        else:
+            # Not connected, scan for device
+            self.scan_for_device_version()
+
+        # Only skip scanning if NOT already connected and a test window is open
         # Skip if any test window is open (HRV or Hyperkalemia)
         if hasattr(self, 'hrv_window') and self.hrv_window and self.hrv_window.isVisible():
             return
@@ -4127,24 +4160,6 @@ class Dashboard(QWidget):
         # Skip if on ECG Test Page (stacked widget)
         if self.page_stack.currentWidget() == getattr(self, 'ecg_test_page', None):
             return
-
-        if not SERIAL_AVAILABLE:
-            return
-
-        if self.device_connected and self.device_port:
-            # Device is supposed to be connected, verify it
-            try:
-                available_ports = [p.device for p in serial.tools.list_ports.comports()]
-                if self.device_port not in available_ports:
-                    print(f"⚠️ Port {self.device_port} disconnected.")
-                    self.device_connected = False
-                    self.device_port = None
-                    self.update_device_ui(False)
-            except Exception:
-                pass
-        else:
-            # Not connected, scan for device
-            self.scan_for_device_version()
 
     def scan_for_device_version(self):
         """Scan all available ports for the device using version command"""

@@ -2625,91 +2625,86 @@
     ]
   },
   {
-    "timestamp": "2026-02-11 14:11:01",
-    "file": "/Users/deckmount/Downloads/ECG_Report_12_1_20260211_141057.pdf",
-    "HR_bpm": 60,
-    "PR_ms": 159,
-    "QRS_ms": 54,
-    "QT_ms": 401,
-    "QTc_ms": 401,
-    "ST_ms": 0.0,
-    "RR_ms": 1000,
-    "RV5_plus_SV1_mV": 1.773,
-    "P_QRS_T_mm": [
-      -133,
-      -79,
-      -127
-    ],
-    "QTCF": 401.0,
-    "RV5_SV1_mV": [
-      0.709,
-      -1.065
-    ]
-  },
-  {
-    "timestamp": "2026-02-11 14:57:20",
-    "file": "/Users/deckmount/Downloads/ECG_Report_12_1_20260211_145716.pdf",
+    "timestamp": "2026-02-12 10:49:28",
+    "file": "C:\\Users\\tanya\\Downloads\\merge_main\\merge\\HRV_Report_20260212_104906.pdf",
     "HR_bpm": 70,
-    "PR_ms": 138,
-    "QRS_ms": 68,
-    "QT_ms": 328,
-    "QTc_ms": 354,
-    "ST_ms": 0.0,
+    "PR_ms": 185,
+    "QRS_ms": 52,
+    "QT_ms": 343,
+    "QTc_ms": 339,
+    "ST_ms": 0,
     "RR_ms": 857,
-    "RV5_plus_SV1_mV": 4.046,
-    "P_QRS_T_mm": [
-      -151,
-      -176,
-      -137
-    ],
-    "QTCF": 328.0,
-    "RV5_SV1_mV": [
-      0.804,
-      -3.242
-    ]
+    "HRV_SDNN_ms": 11.392004993756707,
+    "HRV_RMSSD_ms": 12.186057606953941,
+    "HRV_NN50": 0,
+    "HRV_pNN50": 0,
+    "HRV_SDANN_ms": 11.392004993756707,
+    "Original_HR_bpm": 60
   },
   {
-    "timestamp": "2026-02-11 14:57:45",
-    "file": "/Users/deckmount/Downloads/ECG_Report_12_1_20260211_145743.pdf",
-    "HR_bpm": 69,
-    "PR_ms": 137,
-    "QRS_ms": 64,
-    "QT_ms": 337,
-    "QTc_ms": 359,
-    "ST_ms": 0.0,
-    "RR_ms": 869,
-    "RV5_plus_SV1_mV": 4.625,
-    "P_QRS_T_mm": [
-      -152,
-      176,
-      -137
-    ],
-    "QTCF": 354.8,
-    "RV5_SV1_mV": [
-      1.05,
-      -3.575
-    ]
-  },
-  {
-    "timestamp": "2026-02-11 14:58:08",
-    "file": "/Users/deckmount/Downloads/ECG_Report_12_1_20260211_145805.pdf",
+    "timestamp": "2026-02-12 11:16:14",
+    "file": "C:\\Users\\tanya\\Downloads\\merge_main\\merge\\ECG_Report_12_1_20260212_111607.pdf",
     "HR_bpm": 72,
-    "PR_ms": 102,
-    "QRS_ms": 66,
-    "QT_ms": 335,
-    "QTc_ms": 362,
+    "PR_ms": 95,
+    "QRS_ms": 56,
+    "QT_ms": 460,
+    "QTc_ms": 519,
     "ST_ms": 0.0,
     "RR_ms": 833,
-    "RV5_plus_SV1_mV": 4.202,
+    "RV5_plus_SV1_mV": 1.742,
     "P_QRS_T_mm": [
-      -151,
-      177,
-      -137
+      -138,
+      18,
+      30
     ],
-    "QTCF": 351.1,
+    "QTCF": 484.3,
     "RV5_SV1_mV": [
-      0.936,
-      -3.265
+      0.573,
+      -1.169
+    ]
+  },
+  {
+    "timestamp": "2026-02-12 11:18:03",
+    "file": "C:\\Users\\tanya\\Downloads\\merge_main\\merge\\ECG_Report_12_1_20260212_111801.pdf",
+    "HR_bpm": 0,
+    "PR_ms": 0,
+    "QRS_ms": 0,
+    "QT_ms": 0,
+    "QTc_ms": 0,
+    "ST_ms": 0,
+    "RR_ms": 0,
+    "RV5_plus_SV1_mV": 1.024,
+    "P_QRS_T_mm": [
+      0,
+      0,
+      0
+    ],
+    "QTCF": null,
+    "RV5_SV1_mV": [
+      0.433,
+      -0.591
+    ]
+  },
+  {
+    "timestamp": "2026-02-12 11:58:38",
+    "file": "C:\\Users\\tanya\\Downloads\\ECG_Report_12_1_20260212_115834.pdf",
+    "HR_bpm": 0,
+    "PR_ms": 0,
+    "QRS_ms": 0,
+    "QT_ms": 0,
+    "QTc_ms": 0,
+    "ST_ms": 0,
+    "RR_ms": 0,
+    "RV5_plus_SV1_mV": 0.0,
+    "P_QRS_T_mm": [
+      0,
+      0,
+      0
+    ],
+    "QTCF": null,
+    "RV5_SV1_mV": [
+      0.0,
+      0.0
     ]
   }
 ]

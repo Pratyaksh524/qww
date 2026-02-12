@@ -5584,11 +5584,14 @@ class ECGTestPage(QWidget):
                 print(f" Using configured port {port_to_use}, skipping auto-scan.")
 
             try:
-                # Use new packet-based SerialStreamReader on the detected/selected port
-                self.serial_reader = SerialStreamReader(port_to_use, baud_int)
+                # Use GlobalHardwareManager to get the shared SerialStreamReader
+                from ecg.serial.serial_reader import GlobalHardwareManager
+                self.serial_reader = GlobalHardwareManager().get_reader(port_to_use, baud_int)
                 # Pass user details to serial reader for error reporting (already set in __init__)
                 if hasattr(self, 'user_details'):
                     self.serial_reader.user_details = self.user_details
+                    
+                # If it's already running, we don't need to send START again
                 self.serial_reader.start()
                 print(f" Serial connection established successfully on {port_to_use}!")
 
@@ -7944,6 +7947,7 @@ class ECGTestPage(QWidget):
                             except Exception as filter_error:
                                 # Fallback: use original signal (baseline anchor handles it, no mean subtraction)
                                 print(f" Using fallback baseline correction: {filter_error}")
+                                pass
                             
                             # Apply gain to zero-centered signal (only amplifies variations, baseline stays at zero)
                             raw = raw * gain

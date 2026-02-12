@@ -1245,13 +1245,9 @@ class DemoManager:
                                 'ST': fixed_st  # P duration (st_interval label shows "P")
                             }
 
-                        payload = dict(self._demo_fixed_metrics) if self._demo_fixed_metrics else {}
-                        try:
-                            if heart_rate and 10 <= heart_rate <= 300:
-                                payload['Heart_Rate'] = int(round(heart_rate))
-                        except Exception:
-                            pass
-                        # Add live time since demo start in mm:ss
+                        # Always send fixed metrics in demo mode
+                        payload = dict(self._demo_fixed_metrics)
+
                         try:
                             if self._demo_started_at:
                                 elapsed = max(0, int(time.time() - self._demo_started_at))
