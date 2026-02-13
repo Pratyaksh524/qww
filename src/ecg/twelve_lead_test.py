@@ -5725,10 +5725,6 @@ class ECGTestPage(QWidget):
 
         port = self.settings_manager.get_serial_port()
         baud = self.settings_manager.get_baud_rate()
-        
-        if port == "Select Port" or baud == "Select Baud Rate" or port is None or baud is None:
-            self.show_connection_warning("Please configure serial port and baud rate in System Setup first.")
-            return
             
         if self.serial_reader:
             self.serial_reader.stop()
@@ -8084,8 +8080,6 @@ class ECGTestPage(QWidget):
                     if was_running and not self.serial_reader.running:
                         print("CRITICAL: Device disconnected during test!")
                         self.stop_acquisition()
-                        QMessageBox.critical(self, "Test Failed", "Test failed, Please check if device is properly connected")
-                        self.go_back()
                         return
                     
                     # Safety check: If buffer is accumulating too fast, warn and clear it

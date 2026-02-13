@@ -354,6 +354,14 @@ class HRVTestWindow(QWidget):
         # Get port from settings or auto-detect
         port_to_use = self.settings_manager.get_serial_port()
         baudrate = int(self.settings_manager.get_setting("baud_rate", "115200"))
+
+        # Check if we already have an active reader in GlobalHardwareManager
+        from ecg.serial.serial_reader import GlobalHardwareManager
+        existing_reader = GlobalHardwareManager().reader
+        if existing_reader and existing_reader.ser and existing_reader.ser.is_open:
+            if not port_to_use or port_to_use == "Select Port":
+                port_to_use = existing_reader.ser.port
+                print(f" Using existing active serial port: {port_to_use}")
         
         # Check if port needs scanning (not set or not in available ports)
         scan_needed = (not port_to_use or port_to_use == "Select Port")
@@ -516,8 +524,6 @@ class HRVTestWindow(QWidget):
         if not self.serial_reader.running:
             print("⚠️ Device disconnected during HRV test!")
             self.stop_capture()
-            QMessageBox.critical(self, "Test Failed", "Device disconnected. Test failed.")
-            self.close() # Return to dashboard
             return
             
         

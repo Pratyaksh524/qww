@@ -4144,6 +4144,21 @@ class Dashboard(QWidget):
                             self.hyperkalemia_window.stop_capture()
                         QMessageBox.critical(self.hyperkalemia_window, "Test Failed", "Device disconnected. Test failed.")
                         self.hyperkalemia_window.close()
+                    # If ECG 12 lead test is running (on the stacked widget), show "Test Failed" and go back to dashboard
+                    elif self.page_stack.currentWidget() == getattr(self, 'ecg_test_page', None):
+                        if hasattr(self.ecg_test_page, 'stop_acquisition'):
+                            self.ecg_test_page.stop_acquisition()
+
+                        # Close any open expanded lead view dialogs
+                        try:
+                            for widget in QApplication.topLevelWidgets():
+                                if widget.__class__.__name__ == 'ExpandedLeadView':
+                                    widget.close()
+                        except Exception as e:
+                            print(f"Error closing expanded views: {e}")
+
+                        QMessageBox.critical(self, "Test Failed", "Device disconnected. Test Failed")
+                        self.page_stack.setCurrentWidget(self.dashboard_page)
 
             except Exception:
                 pass
