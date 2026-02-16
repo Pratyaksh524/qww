@@ -132,22 +132,50 @@ def generate_realistic_ecg_waveform(duration_seconds=10, sampling_rate=500, hear
 
 
 class SamplingRateCalculator:
-    """Calculate sampling rate from sample count and time"""
-    def __init__(self, update_interval_sec=5):
-        self.sample_count = 0
-        self.last_update_time = None
-        self.update_interval = update_interval_sec
-        self.sampling_rate = 0
+    """
+    Calculate sampling rate from sample count and time.
+    
+    FIX #4: Now uses SamplingRateGuard to prevent wrong sampling rate during
+    warmup (was reporting 228.9 Hz instead of 500 Hz for first ~1000 packets).
+    """
+    def __init__(self, update_interval_sec=5, configured_rate_hz=500.0):
+        from ..acquisition_utils import SamplingRateGuard
         import time
+        
+        self.sample_count = 0
         self.last_update_time = time.monotonic()
+        self.update_interval = update_interval_sec
+        self.sampling_rate = configured_rate_hz  # FIX #4: Start with configured rate
+        
+        # FIX #4: Sampling rate guard with warmup
+        self._rate_guard = SamplingRateGuard(
+            configured_rate_hz=configured_rate_hz,
+            warmup_seconds=2.0,
+            min_samples=1000,
+            max_deviation_pct=40.0
+        )
 
     def add_sample(self):
         import time
         self.sample_count += 1
+        
+        # FIX #4: Track samples for warmup guard
+        self._rate_guard.record_samples(1)
+        
         current_time = time.monotonic()
         elapsed = current_time - self.last_update_time
+        
         if elapsed >= self.update_interval:
-            self.sampling_rate = self.sample_count / elapsed
+            # Calculate raw detected rate
+            detected_rate = self.sample_count / elapsed
+            
+            # FIX #4: Feed to guard for validation
+            self._rate_guard.update_detected_rate(detected_rate)
+            
+            # FIX #4: Get guarded rate (configured during warmup, validated after)
+            self.sampling_rate = self._rate_guard.get_rate()
+            
             self.sample_count = 0
             self.last_update_time = current_time
+            
         return self.sampling_rate

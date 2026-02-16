@@ -8,32 +8,59 @@ from collections import deque
 
 # Global smoothing buffers for BPM stabilization
 _bpm_smoothing_buffers = {}  # Key: instance_id, Value: deque buffer
-_bpm_ema_values = {}  # Key: instance_id, Value: EMA value
-_last_stable_bpm = {}  # Key: instance_id, Value: Last stable BPM value
-_bpm_last_success_ts = {}  # Key: instance_id, Value: last success timestamp
+_bpm_ema_values = {}         # Key: instance_id, Value: EMA value
+_last_stable_bpm = {}        # Key: instance_id, Value: Last stable BPM value
+_bpm_last_success_ts = {}    # Key: instance_id, Value: last success timestamp
+
+# FIX #5: Startup beat counter — do not emit HR until enough stable beats seen
+_bpm_beat_count = {}         # Key: instance_id, Value: cumulative beat count
+
+
+def cleanup_instance(instance_id: str):
+    """
+    Remove all smoothing state for a given instance_id.
+
+    Call this when a monitoring session ends to prevent memory leaks
+    in long-running processes that create many instance_ids over time.
+
+    Args:
+        instance_id: The instance key used in calculate_heart_rate_from_signal()
+    """
+    for d in (_bpm_smoothing_buffers, _bpm_ema_values,
+              _last_stable_bpm, _bpm_last_success_ts, _bpm_beat_count):
+        d.pop(instance_id, None)
+
+
+# FIX #5: Startup parameters
+_STARTUP_LOCKOUT_BEATS = 5    # Ignore first N beat detections
+_STARTUP_RR_MAX_MS     = 2000 # RR > 2000ms (< 30 BPM) at startup = noise floor
+_STARTUP_ECTOPIC_TOL   = 0.10 # Tighter ectopic rejection during warmup (10%)
+_NORMAL_ECTOPIC_TOL    = 0.20 # Normal tolerance after warmup (20%)
 
 
 def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None, instance_id=None):
-    """Calculate heart rate from Lead II data using R-R intervals
-    
+    """Calculate heart rate from Lead II data using R-R intervals.
+
     Args:
-        lead_data: Raw ECG signal data (numpy array or list)
-        sampling_rate: Sampling rate in Hz (optional, defaults to 500 Hz)
-        sampler: SamplingRateCalculator instance (optional, used if sampling_rate not provided)
-    
+        lead_data:      Raw ECG signal data (numpy array or list).
+        sampling_rate:  Sampling rate in Hz (optional, defaults to 500 Hz).
+        sampler:        SamplingRateCalculator instance (optional).
+        instance_id:    Key for per-instance smoothing buffers.
+
     Returns:
-        int: Heart rate in BPM (10-300 range), or 0 if calculation fails
+        int: Heart rate in BPM (10–300 range), or 0 if calculation fails.
     """
     try:
         buffer_key = instance_id if instance_id is not None else 'global'
+
         def _fallback_value():
             last = _last_stable_bpm.get(buffer_key, None)
             last_success = _bpm_last_success_ts.get(buffer_key, 0.0)
-            now = time.time()
-            if last is not None and (now - last_success) <= 0.5:
+            if last is not None and (time.time() - last_success) <= 0.5:
                 return last
             return 0
-        # Early exit: if no real signal, report 0 instead of fallback
+
+        # ── Early exit: flat / silent signal ─────────────────────────────
         try:
             arr = np.asarray(lead_data, dtype=float)
             if len(arr) < 200 or np.all(arr == 0) or np.std(arr) < 0.1:
@@ -41,40 +68,34 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
         except Exception:
             return 0
 
-        # Validate input data
+        # ── Validate input ────────────────────────────────────────────────
         if not isinstance(lead_data, (list, np.ndarray)) or len(lead_data) < 200:
             print(" Insufficient data for heart rate calculation")
             return _fallback_value()
 
-        # Convert to numpy array for processing
         try:
             lead_data = np.asarray(lead_data, dtype=float)
         except Exception as e:
             print(f" Error converting lead data to array: {e}")
             return _fallback_value()
 
-        # Check for invalid values
         if np.any(np.isnan(lead_data)) or np.any(np.isinf(lead_data)):
             print(" Invalid values (NaN/Inf) in lead data")
             return _fallback_value()
 
-        # Get sampling rate
-        is_windows = platform.system() == 'Windows'
-        platform_tag = "[Windows]" if is_windows else "[macOS/Linux]"
-        
-        fs = 500.0  # Standard fallback for all platforms
+        # ── Sampling rate ─────────────────────────────────────────────────
+        fs = 500.0
         if sampling_rate is not None and sampling_rate > 10:
             fs = float(sampling_rate)
-        elif sampler is not None and hasattr(sampler, 'sampling_rate') and sampler.sampling_rate > 10:
-            detected_rate = sampler.sampling_rate
-            if detected_rate > 10 and np.isfinite(detected_rate):
-                fs = float(detected_rate)
-        
-        # Validation
+        elif (sampler is not None and hasattr(sampler, 'sampling_rate')
+              and sampler.sampling_rate > 10):
+            detected = sampler.sampling_rate
+            if np.isfinite(detected):
+                fs = float(detected)
         if fs <= 0 or not np.isfinite(fs):
-            fs = 500.0  # Fallback
+            fs = 500.0
 
-        # Apply display filter for R-peak detection (0.5-40 Hz)
+        # ── Filter ────────────────────────────────────────────────────────
         try:
             from ..signal_paths import display_filter
             filtered_signal = display_filter(lead_data, fs)
@@ -85,105 +106,153 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
             print(f" Error in signal filtering: {e}")
             return _fallback_value()
 
-        # Find R-peaks using scipy with robust parameters
+        # ── Peak detection ────────────────────────────────────────────────
         try:
             signal_mean = np.mean(filtered_signal)
-            signal_std = np.std(filtered_signal)
+            signal_std  = np.std(filtered_signal)
             if signal_std == 0:
                 print(" No signal variation detected")
                 return _fallback_value()
-            
-            # SMART ADAPTIVE PEAK DETECTION (10-300 BPM with BPM-based selection)
-            height_threshold = signal_mean + 0.5 * signal_std
+
+            height_threshold     = signal_mean + 0.5 * signal_std
             prominence_threshold = signal_std * 0.4
-            
-            # Run 3 detection strategies
+
+            # FIX #3: initialise peaks so NameError cannot occur if all
+            # strategies fail AND the fallback find_peaks also raises.
+            peaks = np.array([], dtype=int)
+
             detection_results = []
-            
-            # Strategy 1: Conservative (best for 10-120 BPM)
+
+            # Strategy 1: Conservative – best for 10–120 BPM
             peaks_conservative, _ = find_peaks(
                 filtered_signal,
                 height=height_threshold,
-                distance=int(0.35 * fs),  # 350ms (allows ~170 BPM max, filters noise better)
-                prominence=prominence_threshold
+                distance=int(0.35 * fs),
+                prominence=prominence_threshold,
             )
             if len(peaks_conservative) >= 2:
-                rr_cons = np.diff(peaks_conservative) * (1000 / fs)
-                valid_cons = rr_cons[(rr_cons >= 200) & (rr_cons <= 6000)]
-                if len(valid_cons) > 0:
-                    bpm_cons = 60000 / np.median(valid_cons)
-                    std_cons = np.std(valid_cons)
-                    detection_results.append(('conservative', peaks_conservative, bpm_cons, std_cons))
-            
-            # Strategy 2: Normal (best for 100-180 BPM)
+                rr = np.diff(peaks_conservative) * (1000.0 / fs)
+                valid = rr[(rr >= 200) & (rr <= 6000)]
+                if len(valid) > 0:
+                    detection_results.append((
+                        'conservative', peaks_conservative,
+                        60000.0 / np.median(valid), np.std(valid)
+                    ))
+
+            # Strategy 2: Normal – best for 100–180 BPM
             peaks_normal, _ = find_peaks(
                 filtered_signal,
                 height=height_threshold,
-                distance=int(0.22 * fs),  # 220ms (allows ~270 BPM max)
-                prominence=prominence_threshold
+                distance=int(0.22 * fs),
+                prominence=prominence_threshold,
             )
             if len(peaks_normal) >= 2:
-                rr_norm = np.diff(peaks_normal) * (1000 / fs)
-                valid_norm = rr_norm[(rr_norm >= 200) & (rr_norm <= 6000)]
-                if len(valid_norm) > 0:
-                    bpm_norm = 60000 / np.median(valid_norm)
-                    std_norm = np.std(valid_norm)
-                    detection_results.append(('normal', peaks_normal, bpm_norm, std_norm))
-            
-            # Strategy 3: Tight (best for 160-300 BPM)
+                rr = np.diff(peaks_normal) * (1000.0 / fs)
+                valid = rr[(rr >= 200) & (rr <= 6000)]
+                if len(valid) > 0:
+                    detection_results.append((
+                        'normal', peaks_normal,
+                        60000.0 / np.median(valid), np.std(valid)
+                    ))
+
+            # Strategy 3: Tight – best for 160-220 BPM
             peaks_tight, _ = find_peaks(
                 filtered_signal,
                 height=height_threshold,
-                distance=int(0.12 * fs),  # 120ms (allows ~500 BPM max)
-                prominence=prominence_threshold
+                distance=int(0.12 * fs),
+                prominence=prominence_threshold,
             )
             if len(peaks_tight) >= 2:
-                rr_tight = np.diff(peaks_tight) * (1000 / fs)
-                valid_tight = rr_tight[(rr_tight >= 200) & (rr_tight <= 6000)]
-                if len(valid_tight) > 0:
-                    bpm_tight = 60000 / np.median(valid_tight)
-                    std_tight = np.std(valid_tight)
-                    detection_results.append(('tight', peaks_tight, bpm_tight, std_tight))
-            
-            # Select based on BPM consistency (lowest std deviation = most stable)
-            # ENHANCED SELECTION LOGIC: Prefer higher valid rates to avoid aliasing (harmonics)
-            # If a faster strategy finds ~2x or ~1.5x the rate of a slower one, it's likely the real rate
-            # unless the faster one is very unstable.
+                rr = np.diff(peaks_tight) * (1000.0 / fs)
+                valid = rr[(rr >= 200) & (rr <= 6000)]
+                if len(valid) > 0:
+                    detection_results.append((
+                        'tight', peaks_tight,
+                        60000.0 / np.median(valid), np.std(valid)
+                    ))
+
+            # Strategy 4: Ultra-tight – best for 200-300 BPM (FIX: high BPM halving issue)
+            # At 300 BPM, RR interval = 200ms = 100 samples at 500Hz
+            # distance=0.15*fs = 75 samples allows detection of peaks as close as 150ms apart
+            peaks_ultra_tight, _ = find_peaks(
+                filtered_signal,
+                height=height_threshold,
+                distance=int(0.15 * fs),
+                prominence=prominence_threshold,  # Restored normal prominence to avoid T-waves
+            )
+            if len(peaks_ultra_tight) >= 2:
+                rr = np.diff(peaks_ultra_tight) * (1000.0 / fs)
+                valid = rr[(rr >= 200) & (rr <= 6000)]
+                if len(valid) > 0:
+                    bpm_ultra = 60000.0 / np.median(valid)
+                    # FIX: Recalculate std for ultra-tight
+                    std_ultra = np.std(valid)
+                    detection_results.append((
+                        'ultra_tight', peaks_ultra_tight,
+                        bpm_ultra, std_ultra
+                    ))
+
+            # FIX #2: Proper best-candidate selection.
+            # Among all strategies whose std is within stability limits,
+            # prefer the one with the LOWEST std (most consistent RR intervals).
+            # Sorting by BPM descending first avoids choosing a sub-harmonic
+            # (half the real rate) when a faster stable strategy also exists.
             if detection_results:
-                # Sort by BPM descending first to check fastest valid rates
-                detection_results.sort(key=lambda x: x[2], reverse=True)
-                
-                best_candidate = None
-                
-                # Check candidates from fastest to slowest
-                for i in range(len(detection_results)):
-                    method, peaks, bpm, std = detection_results[i]
+                # Candidates that pass the stability gate
+                # FIX: Adaptive stability thresholds for high BPM
+                # At high heart rates (>180 BPM), allow higher std because:
+                # 1. RR intervals are shorter, so absolute std naturally higher
+                # 2. Ultra-tight detection may have slightly more variance
+                stable_candidates = []
+                for r in detection_results:
+                    method, peaks_result, bpm, std = r
+                    # Adaptive thresholds based on BPM
+                    if bpm > 180:
+                        # High BPM: allow std up to 25ms or 20% of BPM
+                        max_std_abs = 25
+                        max_std_pct = 0.20
+                    else:
+                        # Normal BPM: stricter thresholds
+                        max_std_abs = 15
+                        max_std_pct = 0.15
                     
-                    # 1. Stability Check: If std dev is high (>10% of BPM or >15), it's likely noise
-                    if std > 15 or std > (bpm * 0.15):
-                        continue
-                        
-                    # 2. Harmonics Check: Compare with slower reliable strategies
-                    # If this is the fastest strategy, accept it if it's stable
-                    if best_candidate is None:
-                        best_candidate = detection_results[i]
-                        continue
-                        
-                # If we found a stable candidate, use it
-                if best_candidate:
-                     best_method, peaks, best_bpm, best_std = best_candidate
+                    if std <= max_std_abs and std <= bpm * max_std_pct:
+                        stable_candidates.append(r)
+                        print(f" ✓ Strategy '{method}' PASSED stability gate: BPM={bpm:.1f}, std={std:.1f}ms (max_std={max_std_abs}ms, max_pct={max_std_pct*100}%)")
+                    else:
+                        print(f" ✗ Strategy '{method}' FAILED stability gate: BPM={bpm:.1f}, std={std:.1f}ms (max_std={max_std_abs}ms, max_pct={max_std_pct*100}%)")
+
+                if stable_candidates:
+                    # Among stable candidates prefer highest BPM (avoids sub-harmonic aliasing),
+                    # but only if a faster candidate's BPM is not >10% higher than the next one
+                    # (which would indicate noise rather than a true faster rate).
+                    # CRITICAL FIX: Always prefer highest BPM to avoid sub-harmonic detection
+                    # Strategy detecting every other beat looks "stable" but gives half the rate
+                    stable_candidates.sort(key=lambda x: x[2], reverse=True)
+                    best_method, peaks, best_bpm, best_std = stable_candidates[0]
+                    # Log RR intervals
+                    rr_median_ms = 60000.0 / best_bpm if best_bpm > 0 else 0
+                    print(f" 🎯 SELECTED: '{best_method}' strategy with BPM={best_bpm:.1f}, std={best_std:.1f}ms, RR_median={rr_median_ms:.1f}ms")
                 else:
-                    # Fallback: Sort by stability (original logic) if no high-rate candidate is stable
+                    # Fallback: take the most stable result even if not ideal
                     detection_results.sort(key=lambda x: x[3])
                     best_method, peaks, best_bpm, best_std = detection_results[0]
+                    rr_median_ms = 60000.0 / best_bpm if best_bpm > 0 else 0
+                    print(f" ⚠️ FALLBACK: No stable candidates, using '{best_method}' with BPM={best_bpm:.1f}, std={best_std:.1f}ms, RR_median={rr_median_ms:.1f}ms")
+                    
+                    # LOGGING: Print why others failed
+                    print(f" WARNING: High-BPM Debug - Fallback to '{best_method}' (BPM={best_bpm}). Candidates were:")
+                    for r in detection_results:
+                         print(f"   - {r[0]}: BPM={r[2]:.1f}, std={r[3]:.1f}")
             else:
-                # Fallback - use conservative distance
+                # Fallback when no strategy found ≥2 peaks
                 peaks, _ = find_peaks(
                     filtered_signal,
                     height=height_threshold,
                     distance=int(0.4 * fs),
-                    prominence=prominence_threshold
+                    prominence=prominence_threshold,
                 )
+
         except Exception as e:
             print(f" Error in peak detection: {e}")
             return _fallback_value()
@@ -192,56 +261,69 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
             print(f" Insufficient peaks detected: {len(peaks)}")
             return _fallback_value()
 
-        # Calculate R-R intervals in milliseconds
+        # ── RR intervals ──────────────────────────────────────────────────
         try:
-            rr_intervals_ms = np.diff(peaks) * (1000 / fs)
+            rr_intervals_ms = np.diff(peaks) * (1000.0 / fs)
             if len(rr_intervals_ms) == 0:
-                print(" No R-R intervals calculated")
                 return _fallback_value()
         except Exception as e:
             print(f" Error calculating R-R intervals: {e}")
             return _fallback_value()
 
-        # Filter physiologically reasonable intervals (200-6000 ms = 10-300 BPM)
+        # ── Physiological filter + ectopic rejection ──────────────────────
         try:
-            valid_intervals = rr_intervals_ms[(rr_intervals_ms >= 200) & (rr_intervals_ms <= 6000)]
-            
+            valid_intervals = rr_intervals_ms[
+                (rr_intervals_ms >= 200) & (rr_intervals_ms <= 6000)
+            ]
+
             if len(valid_intervals) < 2:
-                print(" No valid R-R intervals found after initial filter")
+                print(" No valid R-R intervals after initial filter")
                 return _fallback_value()
-            
-            # WARNING FIX #4: Ectopic beat rejection (PVC filtering)
-            # Remove RR intervals >20% from median to exclude premature beats
+
+            # FIX #5: Track cumulative beat count for startup behaviour
+            if buffer_key not in _bpm_beat_count:
+                _bpm_beat_count[buffer_key] = 0
+            _bpm_beat_count[buffer_key] += len(valid_intervals)
+            beat_count = _bpm_beat_count[buffer_key]
+
+            # FIX #5: During startup, apply hard RR floor (< 30 BPM = noise)
+            is_startup = beat_count <= _STARTUP_LOCKOUT_BEATS
+            if is_startup:
+                valid_intervals = valid_intervals[valid_intervals <= _STARTUP_RR_MAX_MS]
+                if len(valid_intervals) < 2:
+                    print(f" Startup lockout: insufficient stable beats ({beat_count}/{_STARTUP_LOCKOUT_BEATS})")
+                    return _fallback_value()
+
+            # FIX #5: Tighter ectopic rejection during startup warmup
+            ectopic_tol = _STARTUP_ECTOPIC_TOL if is_startup else _NORMAL_ECTOPIC_TOL
+
             if len(valid_intervals) >= 3:
                 median_rr_initial = np.median(valid_intervals)
-                tolerance = 0.20 * median_rr_initial  # 20% tolerance
+                tolerance = ectopic_tol * median_rr_initial
                 normal_intervals = valid_intervals[
                     np.abs(valid_intervals - median_rr_initial) <= tolerance
                 ]
-                
-                # Use filtered intervals if we have enough data
                 if len(normal_intervals) >= 2:
                     valid_intervals = normal_intervals
-            
+
             if len(valid_intervals) == 0:
-                print(" No valid R-R intervals found after ectopic beat rejection")
                 return _fallback_value()
 
         except Exception as e:
             print(f" Error filtering intervals: {e}")
             return _fallback_value()
 
-        # Calculate heart rate from median R-R interval
+        # ── Heart rate calculation ─────────────────────────────────────────
         try:
             median_rr = np.median(valid_intervals)
             if median_rr <= 0:
-                print(" Invalid median R-R interval")
                 return _fallback_value()
-            heart_rate = 60000 / median_rr
-            # Extended: stable 10–300 BPM range
-            heart_rate = max(10, min(300, heart_rate))
-            
-            # Extra guard: avoid falsely reporting very high BPM when real rate is very low
+
+            heart_rate = 60000.0 / median_rr
+            heart_rate = max(10.0, min(300.0, heart_rate))
+
+            # FIX #4: Anti-aliasing guard uses the peaks from the selected
+            # strategy (stored in `peaks` above), not a stale variable.
             try:
                 window_sec = len(lead_data) / float(fs)
             except Exception:
@@ -249,60 +331,54 @@ def calculate_heart_rate_from_signal(lead_data, sampling_rate=None, sampler=None
             if heart_rate > 150 and window_sec >= 5.0:
                 expected_peaks = (heart_rate * window_sec) / 60.0
                 if expected_peaks > len(peaks) * 3:
-                    print(f" Suspicious high BPM ({heart_rate:.1f}) with too few peaks. Clamping to 10 bpm.")
+                    print(f" Suspicious high BPM ({heart_rate:.1f}) vs peak count. Clamping.")
                     heart_rate = 10.0
-            
-            if np.isnan(heart_rate) or np.isinf(heart_rate):
-                print(" Invalid heart rate calculated")
+
+            if not np.isfinite(heart_rate):
                 return _fallback_value()
-            
-            # ENHANCED BPM SMOOTHING: Prevent flickering between 99-101 BPM
+
             hr_int = int(round(heart_rate))
-            
-            # Use instance_id for per-instance smoothing (or default to 'global')
-            
-            # Initialize smoothing buffer (larger buffer for better stability)
+
+            # ── EMA + median smoothing ─────────────────────────────────────
             if buffer_key not in _bpm_smoothing_buffers:
-                _bpm_smoothing_buffers[buffer_key] = deque(maxlen=15)  # Increased from 10 to 15
-            
-            buffer = _bpm_smoothing_buffers[buffer_key]
-            buffer.append(hr_int)
-            
-            # Initialize EMA if needed
+                _bpm_smoothing_buffers[buffer_key] = deque(maxlen=15)
+
+            buf = _bpm_smoothing_buffers[buffer_key]
+            buf.append(hr_int)
+
             if buffer_key not in _bpm_ema_values:
                 _bpm_ema_values[buffer_key] = float(hr_int)
-            
-            # Calculate median of buffer (rejects outliers)
-            if len(buffer) >= 5:
-                median_hr = int(round(np.median(list(buffer))))
-            else:
-                median_hr = hr_int
-            
-            try:
-                current_display = int(round(_bpm_ema_values[buffer_key]))
-            except Exception:
-                current_display = int(round(hr_int))
-            alpha = 0.5 if abs(median_hr - current_display) >= 1 else 0.10
-            _bpm_ema_values[buffer_key] = (1 - alpha) * _bpm_ema_values[buffer_key] + alpha * median_hr
-            
+
+            median_hr = int(round(np.median(list(buf)))) if len(buf) >= 5 else hr_int
+
+            current_display = int(round(_bpm_ema_values[buffer_key]))
+
+            # FIX #1: Threshold raised to 5 BPM so that tiny integer
+            # rounding differences (1–4 BPM) use the slow alpha=0.10
+            # path and do not cause constant high-alpha flickering.
+            alpha = 0.5 if abs(median_hr - current_display) >= 5 else 0.10
+            _bpm_ema_values[buffer_key] = (
+                (1 - alpha) * _bpm_ema_values[buffer_key] + alpha * median_hr
+            )
+
             smoothed_hr = int(round(_bpm_ema_values[buffer_key]))
-            
+
             if buffer_key not in _last_stable_bpm:
                 _last_stable_bpm[buffer_key] = smoothed_hr
-            
+
             last_stable = _last_stable_bpm[buffer_key]
-            
+            _bpm_last_success_ts[buffer_key] = time.time()
+
             if abs(smoothed_hr - last_stable) >= 1:
                 _last_stable_bpm[buffer_key] = smoothed_hr
-                _bpm_last_success_ts[buffer_key] = time.time()
                 return smoothed_hr
             else:
-                _bpm_last_success_ts[buffer_key] = time.time()
                 return last_stable
-            
+
         except Exception as e:
             print(f" Error calculating final BPM: {e}")
             return _fallback_value()
+
     except Exception as e:
         print(f" Critical error in calculate_heart_rate_from_signal: {e}")
         return 0

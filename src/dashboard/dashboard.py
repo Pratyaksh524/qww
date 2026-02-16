@@ -1050,7 +1050,6 @@ class Dashboard(QWidget):
             ("HR", "00", "BPM", "heart_rate"),
             ("PR", "0", "ms", "pr_interval"),
             ("QRS Complex", "0", "ms", "qrs_duration"),
-            ("P", "0", "ms", "st_interval"),
             ("QT/QTc", "0", "ms", "qtc_interval"),
         ]
         
@@ -1771,8 +1770,6 @@ class Dashboard(QWidget):
             hr = self.metric_labels.get('heart_rate', QLabel()).text().replace(' ', '').replace('BPM', '') or '--'
             pr = self.metric_labels.get('pr_interval', QLabel()).text().replace(' ', '').replace('ms', '') or '--'
             qrs = self.metric_labels.get('qrs_duration', QLabel()).text().replace(' ', '').replace('ms', '') or '--'
-            st_label_widget = self.metric_labels.get('st_interval') or self.metric_labels.get('st_segment')
-            st = st_label_widget.text().strip() if st_label_widget and st_label_widget.text().strip() else '--'
             qtc_raw = self.metric_labels.get('qtc_interval', QLabel()).text() or '--/--'
             
             # Parse QT/QTc
@@ -1825,7 +1822,6 @@ class Dashboard(QWidget):
                 ("QRS Complex", f"{qrs} ms" if qrs != '--' else '--'),
                 ("QT", f"{qt} ms" if qt != '--' else '--'),
                 ("QTc", f"{qtc} ms" if qtc != '--' else '--'),
-                ("ST", st if st != '--' else '--'),
                 ("RR", f"{rr} ms" if rr != '--' else '--'),
                 ("RV5+SV1", f"{rv5_sv1_sum} mV"),
                 ("P/QRS/T", f"{p_qrs_t} mm"),
@@ -2097,8 +2093,7 @@ class Dashboard(QWidget):
                 'qrs_duration': int(round(qrs_duration)),
                 'qt_interval': int(round(qt_interval)),
                 'qtc_interval': f"{int(round(qt_interval))}/{int(round(qtc_bazett))}",
-                'p_duration': int(round(p_duration)),
-                'st_interval': f"{int(round(p_duration))}"  # st_interval stores P duration (label shows "P")
+                'p_duration': int(round(p_duration))
             }
             
         except Exception as e:
@@ -2364,7 +2359,7 @@ class Dashboard(QWidget):
                         # Store P duration in both p_duration and st_interval (st_interval label shows P)
                         p_duration_int = int(round(p_duration))
                         metrics['p_duration'] = p_duration_int
-                        metrics['st_interval'] = str(p_duration_int)  # Use P duration, not ST interval
+                        metrics['p_duration'] = p_duration_int
                         
                         # Calculate QT Interval from median beat (real formula)
                         qt_val = measure_qt_from_median_beat(median_beat, time_axis, fs, tp_baseline, rr_ms=rr_ms)
@@ -2827,18 +2822,6 @@ class Dashboard(QWidget):
                 self.metric_labels['qtc_interval'].setText(f"{int(round(intervals['QTc']))} ms")
             else:
                 self.metric_labels['qtc_interval'].setText("-- ms")
-        # Update P Duration (stored in st_interval, label shows "P")
-        if 'P' in intervals and intervals['P'] is not None:
-            key = 'st_interval' if 'st_interval' in self.metric_labels else 'st_segment'
-            self.metric_labels[key].setText(
-                f"{int(round(intervals['P']))} ms" if isinstance(intervals['P'], (int, float)) else str(intervals['P'])
-            )
-        elif 'ST' in intervals and intervals['ST'] is not None:
-            # Current metrics card uses 'st_interval' key
-            key = 'st_interval' if 'st_interval' in self.metric_labels else 'st_segment'
-            self.metric_labels[key].setText(
-                f"{int(round(intervals['ST']))} ms" if isinstance(intervals['ST'], (int, float)) else str(intervals['ST'])
-            )
         # Record last update time
         self._last_metrics_update_ts = _time.time()
         

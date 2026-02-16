@@ -45,12 +45,16 @@ def update_ecg_metrics_display(metric_labels: Dict, heart_rate: int, pr_interval
                 qrs_val = int(round(qrs_duration)) if isinstance(qrs_duration, (int, float)) else qrs_duration
                 metric_labels['qrs_duration'].setText(f"{qrs_val:2d}")
             if 'st_interval' in metric_labels:
-                # P-wave duration: display in ms (replaces ST)
+                # ST Interval (now separate from P duration)
+                metric_labels['st_interval'].setText("0") # Default to 0 until ST calc is restored
+            
+            if 'p_duration' in metric_labels:
+                # P-wave duration
                 if isinstance(p_duration, (int, float)) and p_duration > 0:
                     p_val = int(round(p_duration))
-                    metric_labels['st_interval'].setText(f"{p_val}")
+                    metric_labels['p_duration'].setText(f"{p_val}")
                 else:
-                    metric_labels['st_interval'].setText("0")
+                    metric_labels['p_duration'].setText("0")
             if 'qtc_interval' in metric_labels:
                 # Display only QT/QTc on live pages as requested
                 display_text = ""

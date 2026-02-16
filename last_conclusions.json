@@ -1,10 +1,19 @@
 {
-  "timestamp": "2026-02-12 16:09:38",
+  "timestamp": "2026-02-16 14:23:03",
   "findings": [
-    "Normal heart rate",
+    "Rhythm Analysis",
+    "Tachycardia detected",
     "Normal PR interval",
     "Normal QRS duration",
-    "Normal QTc interval"
+    "Slightly prolonged QTc",
+    "Low HRV"
   ],
-  "recommendations": []
+  "recommendations": [
+    "Review detected arrhythmia pattern, consult physician if persistent",
+    "Monitor symptoms, consider medical evaluation if persistent",
+    "Ensure adequate hydration and rest",
+    "Monitor, may be normal variant or medication effect",
+    "Ensure adequate rest and stress management",
+    "Consider relaxation techniques, adequate sleep, and regular exercise"
+  ]
 }

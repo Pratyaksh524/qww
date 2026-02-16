@@ -526,7 +526,44 @@ class HistoryWindow(QDialog):
             if report_type in ["ECG", "HRV", "Hyperkalemia"]:
                 entry["report_type"] = report_type
                 self.all_history_entries.append(entry)
-                self.add_row(entry)
+        
+        # Sort entries by date and time in reverse chronological order (latest first)
+        def get_datetime_key(entry):
+            """Extract datetime for sorting - returns tuple (date, time) for comparison."""
+            try:
+                date_str = entry.get("date", "")
+                time_str = entry.get("time", "")
+                
+                # Parse date (format: YYYY-MM-DD)
+                if date_str:
+                    date_parts = date_str.split("-")
+                    if len(date_parts) == 3:
+                        date_tuple = tuple(map(int, date_parts))
+                    else:
+                        date_tuple = (0, 0, 0)
+                else:
+                    date_tuple = (0, 0, 0)
+                
+                # Parse time (format: HH:MM:SS)
+                if time_str:
+                    time_parts = time_str.split(":")
+                    if len(time_parts) >= 2:
+                        time_tuple = tuple(map(int, time_parts[:3] if len(time_parts) == 3 else time_parts + ["0"]))
+                    else:
+                        time_tuple = (0, 0, 0)
+                else:
+                    time_tuple = (0, 0, 0)
+                
+                return (date_tuple, time_tuple)
+            except:
+                return ((0, 0, 0), (0, 0, 0))
+        
+        # Sort in reverse order (latest first)
+        self.all_history_entries.sort(key=get_datetime_key, reverse=True)
+        
+        # Add sorted entries to table
+        for entry in self.all_history_entries:
+            self.add_row(entry)
 
     def on_search_type_changed(self, search_type):
         """Handle search type change to show/hide appropriate search options."""

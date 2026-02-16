@@ -29,13 +29,21 @@ def calculate_qrs_axis_from_median(data: List[np.ndarray], leads: List[str],
         if lead_i_data is None or lead_ii_data is None or lead_avf_data is None:
             return None
         
-        if len(r_peaks) < 8:  # Need at least 8 beats for median
+        if len(r_peaks) < 4:  # Absolute minimum reduced to 4
             return None
         
+        # Calculate HR to determine min_beats (Fixed Bug P-2: Lower requirement for high BPM)
+        rr_intervals = np.diff(r_peaks) / fs
+        mean_rr = np.mean(rr_intervals) if len(rr_intervals) > 0 else 0.8
+        hr_est = 60 / mean_rr if mean_rr > 0 else 75
+        
+        # Use 4 beats for high HR (>150), otherwise 8 (standard)
+        min_beats_req = 4 if hr_est > 150 else 8
+        
         # Build median beats for Lead I, II, and aVF
-        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=8)
-        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=8)
-        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=8)
+        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=min_beats_req)
         
         if median_beat_i is None or median_beat_ii is None or median_beat_avf is None:
             return None
@@ -94,13 +102,19 @@ def calculate_p_axis_from_median(data: List[np.ndarray], leads: List[str],
         if lead_i_data is None or lead_ii_data is None or lead_avf_data is None:
             return None
         
-        if len(r_peaks) < 8:
+        if len(r_peaks) < 4: # Absolute minimum reduced to 4
             return None
         
+        # Calculate HR to determine min_beats (Fixed Bug P-2)
+        rr_intervals = np.diff(r_peaks) / fs
+        mean_rr = np.mean(rr_intervals) if len(rr_intervals) > 0 else 0.8
+        hr_est = 60 / mean_rr if mean_rr > 0 else 75
+        min_beats_req = 4 if hr_est > 150 else 8
+        
         # Build median beats
-        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=8)
-        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=8)
-        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=8)
+        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=min_beats_req)
         
         if median_beat_i is None or median_beat_ii is None or median_beat_avf is None:
             return None
@@ -156,13 +170,19 @@ def calculate_t_axis_from_median(data: List[np.ndarray], leads: List[str],
         if lead_i_data is None or lead_ii_data is None or lead_avf_data is None:
             return None
         
-        if len(r_peaks) < 8:
+        if len(r_peaks) < 4:
             return None
         
+        # Calculate HR to determine min_beats (Fixed Bug P-2)
+        rr_intervals = np.diff(r_peaks) / fs
+        mean_rr = np.mean(rr_intervals) if len(rr_intervals) > 0 else 0.8
+        hr_est = 60 / mean_rr if mean_rr > 0 else 75
+        min_beats_req = 4 if hr_est > 150 else 8
+        
         # Build median beats
-        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=8)
-        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=8)
-        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=8)
+        time_axis_i, median_beat_i = build_median_beat(lead_i_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_ii, median_beat_ii = build_median_beat(lead_ii_data, r_peaks, fs, min_beats=min_beats_req)
+        time_axis_avf, median_beat_avf = build_median_beat(lead_avf_data, r_peaks, fs, min_beats=min_beats_req)
         
         if median_beat_i is None or median_beat_ii is None or median_beat_avf is None:
             return None

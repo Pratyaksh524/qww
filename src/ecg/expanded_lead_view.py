@@ -623,7 +623,9 @@ class ExpandedLeadView(QDialog):
         self.canvas = FigureCanvas(self.fig)
         # Let the canvas grow/shrink with the window instead of forcing a large minimum
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.setMinimumSize(500, 320)
+        
         plot_layout.addWidget(self.canvas)
 
         # --- AMPLIFICATION CONTROLS ---
@@ -2396,8 +2398,14 @@ class ExpandedLeadView(QDialog):
             # Try to build median beat for this lead's data (works for all leads)
             if build_median_beat is not None and len(r_peaks) >= 8:
                 try:
-                    # Build median beat from this lead's raw clinical data
-                    time_axis, median_beat = build_median_beat(self.ecg_data, r_peaks, self.sampling_rate, min_beats=8)
+                    # Calculate HR to determine min_beats (Fixed Bug P-2: Lower requirement for high BPM)
+                    rr_intervals = np.diff(r_peaks) / self.sampling_rate
+                    mean_rr = np.mean(rr_intervals) if len(rr_intervals) > 0 else 0.8
+                    hr_est = 60 / mean_rr if mean_rr > 0 else 75
+                    min_beats_req = 4 if hr_est > 150 else 8
+
+                    # Build median beats from this lead's raw clinical data
+                    time_axis, median_beat = build_median_beat(self.ecg_data, r_peaks, self.sampling_rate, min_beats=min_beats_req)
                     if median_beat is not None:
                         # Get TP baseline for this lead
                         r_mid = r_peaks[len(r_peaks) // 2]
@@ -2636,24 +2644,25 @@ class ExpandedLeadView(QDialog):
                 end_time = min(start_time + self.view_window_duration, total_duration)
                 self.history_slider_label.setText(f"{start_time:0.1f}s – {end_time:0.1f}s")
 
+    
     def on_history_slider_changed(self, value):
         """Scroll through historical data - works anytime"""
-        print(f" History slider changed to: {value}")
+        # print(f" History slider changed to: {value}")
         self.manual_view = True
         self.history_slider_active = True  # Enable manual control
         self.view_window_offset = value / 1000.0
-        print(f" View window offset set to: {self.view_window_offset:.2f}s")
+        # print(f" View window offset set to: {self.view_window_offset:.2f}s")
         self.update_plot()
         if self.history_slider_label:
             total_duration = len(self.ecg_data) / max(1.0, self.sampling_rate)
             start_time = max(0.0, min(self.view_window_offset, total_duration))
             end_time = min(start_time + self.view_window_duration, total_duration)
             self.history_slider_label.setText(f"{start_time:0.1f}s – {end_time:0.1f}s")
-            print(f" Showing window: {start_time:.1f}s - {end_time:.1f}s")
+            # print(f" Showing window: {start_time:.1f}s - {end_time:.1f}s")
     
     def return_to_live_view(self):
         """Return to live view (most recent data)"""
-        print(" Returning to LIVE view")
+        # print(" Returning to LIVE view")
         self.manual_view = False
         self.history_slider_active = False
         if self.history_slider_label:
@@ -2664,7 +2673,6 @@ class ExpandedLeadView(QDialog):
             self.view_window_offset = max(0.0, total_duration - self.view_window_duration)
             self.update_plot()
             self.update_history_slider()
-
 def show_expanded_lead_view(lead_name, ecg_data, sampling_rate=500, parent=None):
     """Show the expanded lead view dialog"""
     dialog = ExpandedLeadView(lead_name, ecg_data, sampling_rate, parent)

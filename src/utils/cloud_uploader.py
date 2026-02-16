@@ -92,6 +92,11 @@ class CloudUploader:
         # Dropbox Configuration
         self.dropbox_token = os.getenv('DROPBOX_ACCESS_TOKEN')
         
+        # Doctor Review API Configuration
+        self.doctor_review_enabled = os.getenv('DOCTOR_REVIEW_ENABLED', 'false').lower() == 'true'
+        self.doctor_review_api_url = os.getenv('DOCTOR_REVIEW_API_URL')
+        self.doctor_review_api_key = os.getenv('DOCTOR_REVIEW_API_KEY')
+        
         # Log file for upload tracking
         self.upload_log_path = "reports/upload_log.json"
         
@@ -132,6 +137,9 @@ class CloudUploader:
         self.s3_region = os.getenv('AWS_S3_REGION', 'us-east-1')
         self.aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
         self.aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        self.doctor_review_enabled = os.getenv('DOCTOR_REVIEW_ENABLED', 'false').lower() == 'true'
+        self.doctor_review_api_url = os.getenv('DOCTOR_REVIEW_API_URL')
+        self.doctor_review_api_key = os.getenv('DOCTOR_REVIEW_API_KEY')
 
     def get_config_snapshot(self):
         return {
@@ -1083,6 +1091,195 @@ class CloudUploader:
                 "status": "error",
                 "message": f"Failed to clear upload log: {str(e)}"
             }
+    
+    def send_to_doctor_review(self, pdf_path=None, patient_data=None, ecg_data_file=None, report_metadata=None):
+        """
+        Send ECG report to doctor review API endpoint for medical review
+        Supports offline mode - queues for upload when internet is restored
+        
+        Args:
+            pdf_path (str): Path to PDF report file (optional)
+            patient_data (dict): Patient details dictionary (optional)
+            ecg_data_file (str): Path to JSON file containing 12-lead ECG data (optional)
+            report_metadata (dict): Additional metadata about the report (optional)
+            
+        Returns:
+            dict: Result with status, message, and response from doctor review API
+        """
+        if not self.doctor_review_enabled:
+            return {"status": "disabled", "message": "Doctor review API is disabled"}
+        
+        if not self.doctor_review_api_url:
+            return {"status": "error", "message": "Doctor review API URL is not configured"}
+        
+        # Check if online - if offline, queue for later submission
+        if self.offline_queue and not self.offline_queue.is_online():
+            queue_payload = {
+                'pdf_path': pdf_path,
+                'patient_data': patient_data,
+                'ecg_data_file': ecg_data_file,
+                'report_metadata': report_metadata
+            }
+            self.offline_queue.queue_data('doctor_review', queue_payload, priority=1)
+            print(f"📥 Queued report for doctor review when online")
+            return {
+                "status": "queued",
+                "message": "Report queued for doctor review when internet connection is restored"
+            }
+        
+        try:
+            # Prepare the payload for the doctor review API
+            files = {}
+            data = {}
+            
+            # Add PDF file if provided
+            if pdf_path and os.path.exists(pdf_path):
+                files['pdf_report'] = open(pdf_path, 'rb')
+                data['pdf_filename'] = os.path.basename(pdf_path)
+            
+            # Add patient data if provided
+            if patient_data:
+                data['patient_data'] = json.dumps(patient_data)
+            
+            # Add ECG data file if provided
+            if ecg_data_file and os.path.exists(ecg_data_file):
+                files['ecg_data'] = open(ecg_data_file, 'rb')
+                data['ecg_data_filename'] = os.path.basename(ecg_data_file)
+            
+            # Add report metadata if provided
+            if report_metadata:
+                data['report_metadata'] = json.dumps(report_metadata)
+            
+            # Add timestamp
+            data['submitted_at'] = datetime.now().isoformat()
+            
+            # Prepare headers
+            headers = {}
+            if self.doctor_review_api_key:
+                headers['Authorization'] = f'Bearer {self.doctor_review_api_key}'
+            
+            print(f"📤 Sending report to doctor review API: {self.doctor_review_api_url}")
+            
+            # Send POST request to doctor review API
+            try:
+                response = requests.post(
+                    self.doctor_review_api_url,
+                    files=files if files else None,
+                    data=data,
+                    headers=headers,
+                    timeout=30
+                )
+                
+                # Close file handles
+                for f in files.values():
+                    try:
+                        f.close()
+                    except:
+                        pass
+                
+                # Check response status
+                if response.status_code in [200, 201]:
+                    result_data = {}
+                    try:
+                        result_data = response.json() if response.content else {}
+                    except:
+                        pass
+                    
+                    result = {
+                        "status": "success",
+                        "message": "Report successfully sent for doctor review",
+                        "api_response": result_data,
+                        "status_code": response.status_code
+                    }
+                    
+                    # Log the submission
+                    self._log_upload(
+                        pdf_path or ecg_data_file or "doctor_review_submission",
+                        result,
+                        {
+                            "type": "doctor_review",
+                            "submitted_at": data.get('submitted_at'),
+                            "has_pdf": bool(pdf_path),
+                            "has_patient_data": bool(patient_data),
+                            "has_ecg_data": bool(ecg_data_file)
+                        }
+                    )
+                    
+                    print(f"✅ Report sent to doctor review successfully")
+                    return result
+                else:
+                    error_msg = f"Doctor review API returned status {response.status_code}"
+                    try:
+                        error_details = response.text
+                        if error_details:
+                            error_msg += f": {error_details}"
+                    except:
+                        pass
+                    
+                    # If request failed and we have offline queue, queue for retry
+                    if self.offline_queue:
+                        queue_payload = {
+                            'pdf_path': pdf_path,
+                            'patient_data': patient_data,
+                            'ecg_data_file': ecg_data_file,
+                            'report_metadata': report_metadata
+                        }
+                        self.offline_queue.queue_data('doctor_review', queue_payload, priority=1)
+                        return {
+                            "status": "queued",
+                            "message": f"Request failed - queued for retry when online. {error_msg}"
+                        }
+                    
+                    return {
+                        "status": "error",
+                        "message": error_msg,
+                        "status_code": response.status_code
+                    }
+            
+            except requests.exceptions.RequestException as e:
+                # Network error - queue for retry if offline queue is available
+                if self.offline_queue:
+                    queue_payload = {
+                        'pdf_path': pdf_path,
+                        'patient_data': patient_data,
+                        'ecg_data_file': ecg_data_file,
+                        'report_metadata': report_metadata
+                    }
+                    self.offline_queue.queue_data('doctor_review', queue_payload, priority=1)
+                    return {
+                        "status": "queued",
+                        "message": f"Network error - queued for retry when online: {str(e)}"
+                    }
+                
+                return {
+                    "status": "error",
+                    "message": f"Network error: {str(e)}"
+                }
+        
+        except Exception as e:
+            import traceback
+            error_msg = f"Failed to send report for doctor review: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Stack trace: {traceback.format_exc()}")
+            
+            # Try to queue if offline queue is available
+            if self.offline_queue:
+                try:
+                    queue_payload = {
+                        'pdf_path': pdf_path,
+                        'patient_data': patient_data,
+                        'ecg_data_file': ecg_data_file,
+                        'report_metadata': report_metadata
+                    }
+                    self.offline_queue.queue_data('doctor_review', queue_payload, priority=1)
+                    return {
+                        "status": "queued",
+                        "message": f"Error occurred - queued for retry when online: {str(e)}"
+                    }
+                except:
+                    pass
+            
+            return {"status": "error", "message": error_msg}
 
 
 # Global instance
