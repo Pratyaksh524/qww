@@ -123,21 +123,25 @@ class LoginRegisterDialog(QDialog):
         # Initialize sign-in logic
         from auth.sign_in import SignIn
         self.sign_in_logic = SignIn()
+
+        # Resize according to current screen size (~90% of available geometry)
+        try:
+            screen_geom = QApplication.primaryScreen().availableGeometry()
+            target_w = max(int(screen_geom.width() * 0.9), self.minimumWidth())
+            target_h = max(int(screen_geom.height() * 0.9), self.minimumHeight())
+            self.resize(target_w, target_h)
+        except Exception:
+            pass
         
-        # Center the window on screen
-        self.center_on_screen()
+        try:
+            self.setWindowState(Qt.WindowMaximized)
+        except Exception:
+            pass
         
         self.init_ui()
         self.result = False
         self.username = None
         self.user_details = {}
-        self.center_on_screen( )
-
-    def center_on_screen(self):
-        qr = self.frameGeometry()
-        cp = QApplication.desktop().availableGeometry().center()
-        qr.moveCenter(cp)
-        self.move(qr.topLeft())
 
     def init_ui(self):
         # Set up GIF background

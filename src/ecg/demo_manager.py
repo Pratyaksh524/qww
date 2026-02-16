@@ -120,10 +120,10 @@ class DemoManager:
         self.current_wave_speed = self.ecg_test_page.settings_manager.get_wave_speed()
         
         # EXACT SAME LOGIC AS DIVYANSH.PY:
-        # 12.5 mm/s → 20 s window (more peaks visible - compressed)
-        # 25 mm/s → 10 s window (default)
-        # 50 mm/s → 5 s window (fewer peaks visible - stretched)
-        baseline_time_window = 10.0
+        # 12.5 mm/s → 10 s window (more peaks visible - compressed)
+        # 25 mm/s → 5 s window (default)
+        # 50 mm/s → 2.5 s window (fewer peaks visible - stretched)
+        baseline_time_window = 5.0
         self.time_window = baseline_time_window * (25.0 / float(self.current_wave_speed))
         
         print(f" Wave speed updated: {self.current_wave_speed}mm/s (time window: {self.time_window:.1f}s)")

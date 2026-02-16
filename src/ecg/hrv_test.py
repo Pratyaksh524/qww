@@ -213,7 +213,7 @@ class HRVTestWindow(QWidget):
                 background: #ccc;
             }
         """)
-        self.stop_btn.clicked.connect(self.stop_capture)
+        self.stop_btn.clicked.connect(self.confirm_stop)
         self.stop_btn.setEnabled(False)
         controls.addWidget(self.stop_btn)
         
@@ -298,16 +298,23 @@ class HRVTestWindow(QWidget):
         # PyQtGraph plot
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('black')
-        self.plot_widget.setLabel('left', 'Amplitude (mV)', color='white', fontsize=12)
-        self.plot_widget.setLabel('bottom', 'Time (s)', color='white', fontsize=12)
+
+        # Disable manual zoom/pan (amplitude lock)
+        self.plot_widget.setMouseEnabled(x=False, y=False)
+        self.plot_widget.hideButtons()  # Hide auto-scale button
+
+        # self.plot_widget.setLabel('left', 'Amplitude (mV)', color='white', fontsize=12)
+        # self.plot_widget.setLabel('bottom', 'Time (s)', color='white', fontsize=12)
         self.plot_widget.showGrid(x=False, y=False, alpha=0.3)
-        self.plot_widget.getAxis('left').setPen(pg.mkPen(color='white', width=0.7))
-        self.plot_widget.getAxis('bottom').setPen(pg.mkPen(color='white', width=0.7))
-        self.plot_widget.getAxis('left').setTextPen(pg.mkPen(color='white'))
-        self.plot_widget.getAxis('bottom').setTextPen(pg.mkPen(color='white'))
+        # self.plot_widget.getAxis('left').setPen(pg.mkPen(color='white', width=0.7))
+        # self.plot_widget.getAxis('bottom').setPen(pg.mkPen(color='white', width=0.7))
+        # self.plot_widget.getAxis('left').setTextPen(pg.mkPen(color='white'))
+        # self.plot_widget.getAxis('bottom').setTextPen(pg.mkPen(color='white'))
+        self.plot_widget.showAxis('left', False)
+        self.plot_widget.showAxis('bottom', False)
         
         # Plot curve
-        self.plot_curve = self.plot_widget.plot([], [], pen=pg.mkPen(color='#00FF00', width=0.7))
+        self.plot_curve = self.plot_widget.plot([], [], pen=pg.mkPen(color='#00FF00', width=1.2))
         
         plot_layout.addWidget(self.plot_widget)
         layout.addWidget(plot_frame, stretch=1)
@@ -330,6 +337,8 @@ class HRVTestWindow(QWidget):
             self.selected_lead = text
             
         self.title_label.setText(f"HRV Test - {text}")
+
+        self.info_label.setText(f"Capture 5 minutes of {text} data for HRV analysis. The capture will stop automatically after 5 minutes.")
         
     def refresh_com_ports(self):
         """Refresh available COM ports"""
@@ -437,6 +446,10 @@ class HRVTestWindow(QWidget):
             self.stop_btn.setEnabled(True)
             self.report_btn.setEnabled(False)
             self.lead_combo.setEnabled(False)
+
+            # Lock display interaction during capture
+            self.plot_widget.setMouseEnabled(x=False, y=False)
+
             self.status_label.setText("Status: Capturing...")
             self.status_label.setStyleSheet("color: #28a745; padding: 5px;")
             
@@ -488,6 +501,9 @@ class HRVTestWindow(QWidget):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.lead_combo.setEnabled(True)
+
+        # Re-enable display interaction after capture (optional, but allows inspection)
+        self.plot_widget.setMouseEnabled(x=True, y=True)
         
         if len(self.captured_data) > 0:
             self.report_btn.setEnabled(True)
@@ -497,6 +513,26 @@ class HRVTestWindow(QWidget):
         
         self.status_label.setStyleSheet("color: #666; padding: 5px;")
         self.timer_label.setText("Time: 00:00")
+
+    def confirm_stop(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Stop",
+            "Are you sure you want to stop?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self.stop_capture()
+            finally:
+                if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
+                    try:
+                        self.dashboard_instance.raise_()
+                        self.dashboard_instance.activateWindow()
+                    except Exception:
+                        pass
+                self.close()
     
     def check_duration(self):
         """Check if 5 minutes have elapsed"""

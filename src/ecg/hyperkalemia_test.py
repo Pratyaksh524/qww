@@ -235,7 +235,7 @@ class HyperkalemiaTestWindow(QWidget):
                 background: #ccc;
             }
         """)
-        self.stop_btn.clicked.connect(self.stop_capture)
+        self.stop_btn.clicked.connect(self.confirm_stop)
         self.stop_btn.setEnabled(False)
         controls.addWidget(self.stop_btn)
         
@@ -584,6 +584,26 @@ class HyperkalemiaTestWindow(QWidget):
         
         self.status_label.setStyleSheet("color: #666; padding: 5px;")
         self.timer_label.setText("Time: 00:00")
+
+    def confirm_stop(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Stop",
+            "Are you sure you want to stop?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self.stop_capture()
+            finally:
+                if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
+                    try:
+                        self.dashboard_instance.raise_()
+                        self.dashboard_instance.activateWindow()
+                    except Exception:
+                        pass
+                self.close()
     
     def check_duration(self):
         """Check if 30 seconds have elapsed"""
@@ -660,14 +680,24 @@ class HyperkalemiaTestWindow(QWidget):
             
             # Update sampling rate counter
             if self.ecg_calculator and hasattr(self.ecg_calculator, "sampler"):
-                sr = self.ecg_calculator.sampler.add_sample()
+                sr = 0.0
+                try:
+                    for _ in range(len(packets)):
+                        sr = self.ecg_calculator.sampler.add_sample()
+                except Exception:
+                    sr = self.ecg_calculator.sampler.add_sample()
                 if sr > 0:
-                    self.sampling_rate = sr
+                    safe_sr = float(sr)
+                    if safe_sr < 100.0 or safe_sr > 1000.0:
+                        safe_sr = 500.0
+                    self.sampling_rate = safe_sr
 
             # Get filter settings from SettingsManager
             ac_val = self.settings_manager.get_setting("filter_ac", "50")
             emg_val = self.settings_manager.get_setting("filter_emg", "35")
             fs = self.sampling_rate if self.sampling_rate > 0 else 500.0
+            if fs < 100.0 or fs > 1000.0:
+                fs = 500.0
             
             # Update all plots with stable display window
             for lead_name in self.lead_data.keys():
@@ -722,9 +752,12 @@ class HyperkalemiaTestWindow(QWidget):
         
         try:
             # Sync sampling rate
-            current_fs = self.sampling_rate
+            current_fs = self.sampling_rate if self.sampling_rate > 0 else 500.0
+            if current_fs < 100.0 or current_fs > 1000.0:
+                current_fs = 500.0
             if self.ecg_calculator and self.ecg_calculator.sampler:
                 self.ecg_calculator.sampler.sampling_rate = current_fs
+                self.ecg_calculator.sampling_rate = current_fs
 
                 # TRIGGER STABLE MEDIAN-BEAT ANALYSIS
                 try:
@@ -746,12 +779,15 @@ class HyperkalemiaTestWindow(QWidget):
 
                 # FETCH SMOOTHED METRICS
                 metrics = self.ecg_calculator.get_current_metrics()
+                print("metrics:", metrics)
                 
                 # Update UI labels
                 hr_val = metrics.get('heart_rate', '0')
                 pr_val = metrics.get('pr_interval', '0')
                 qrs_val = metrics.get('qrs_duration', '0')
                 qtc_val = metrics.get('qtc_interval', '0')
+
+                print(f"Heart Rate: {hr_val} BPM, PR Interval: {pr_val} ms, QRS Duration: {qrs_val} ms, QTC Interval: {qtc_val} ms")
 
                 if 'heart_rate' in self.metric_labels:
                     self.metric_labels['heart_rate'].setText(f"{hr_val} BPM" if hr_val != '0' else "00 BPM")

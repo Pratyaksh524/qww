@@ -414,6 +414,8 @@ class ExpandedLeadView(QDialog):
         self.history_slider_label = None
         self.history_slider_frame = None
         self.view_window_duration = 10.0  # seconds visible at once
+        self.min_view_window_duration = 2.0  # min time window (seconds)
+        self.max_view_window_duration = 60.0  # max time window (seconds)
         self.view_window_offset = 0.0
         self.manual_view = False
         self.history_slider_active = False
@@ -630,6 +632,75 @@ class ExpandedLeadView(QDialog):
         control_layout = QHBoxLayout(control_frame)
         control_layout.setContentsMargins(10, 5, 10, 5)
         control_layout.setSpacing(10)
+
+        # Zoom (time) controls
+        zoom_title = QLabel("Zoom:")
+        zoom_title.setStyleSheet("""
+            color: #2c3e50; 
+            font-weight: bold; 
+            font-size: 11pt;
+            background: transparent;
+            border: none;
+        """)
+        control_layout.addWidget(zoom_title)
+
+        zoom_out_btn = QPushButton("−")
+        zoom_out_btn.setMinimumSize(40, 35)
+        zoom_out_btn.setMaximumSize(40, 35)
+        zoom_out_btn.setStyleSheet("""
+            QPushButton {
+                background: #3498db; 
+                color: white; 
+                border-radius: 6px;
+                font-weight: bold; 
+                font-size: 18pt;
+                border: 2px solid #2980b9;
+            }
+            QPushButton:hover { 
+                background: #2980b9; 
+            }
+            QPushButton:pressed {
+                background: #21618c;
+            }
+        """)
+        zoom_out_btn.clicked.connect(self.zoom_out_time)
+        control_layout.addWidget(zoom_out_btn)
+
+        self.zoom_label = QLabel(f"{self.view_window_duration:.1f}s")
+        self.zoom_label.setMinimumWidth(60)
+        self.zoom_label.setAlignment(Qt.AlignCenter)
+        self.zoom_label.setStyleSheet("""
+            color: #2c3e50; 
+            font-weight: bold; 
+            font-size: 12pt;
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            padding: 5px;
+        """)
+        control_layout.addWidget(self.zoom_label)
+
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setMinimumSize(40, 35)
+        zoom_in_btn.setMaximumSize(40, 35)
+        zoom_in_btn.setStyleSheet("""
+            QPushButton {
+                background: #3498db; 
+                color: white; 
+                border-radius: 6px;
+                font-weight: bold; 
+                font-size: 18pt;
+                border: 2px solid #2980b9;
+            }
+            QPushButton:hover { 
+                background: #2980b9; 
+            }
+            QPushButton:pressed {
+                background: #21618c;
+            }
+        """)
+        zoom_in_btn.clicked.connect(self.zoom_in_time)
+        control_layout.addWidget(zoom_in_btn)
         
         # Amplification label
         amp_title = QLabel("Amplification:")
@@ -921,6 +992,35 @@ class ExpandedLeadView(QDialog):
             self.amp_label.setText(f"{self.amplification:.2f}x")
         self.update_plot()
         print(" Amplification reset to 0.20x")
+
+    # Time zoom controls (PDF-style + / -)
+    def zoom_in_time(self):
+        """Zoom in (reduce visible time window)."""
+        try:
+            self.view_window_duration = max(self.min_view_window_duration, self.view_window_duration / 1.25)
+            if hasattr(self, 'zoom_label'):
+                self.zoom_label.setText(f"{self.view_window_duration:.1f}s")
+            self.update_plot()
+            self.update_history_slider()
+        except Exception:
+            pass
+
+    def zoom_out_time(self):
+        """Zoom out (increase visible time window)."""
+        try:
+            max_dur = self.max_view_window_duration
+            try:
+                total_duration = len(self.ecg_data) / max(1.0, float(self.sampling_rate))
+                max_dur = min(max_dur, max(2.0, total_duration))
+            except Exception:
+                pass
+            self.view_window_duration = min(max_dur, self.view_window_duration * 1.25)
+            if hasattr(self, 'zoom_label'):
+                self.zoom_label.setText(f"{self.view_window_duration:.1f}s")
+            self.update_plot()
+            self.update_history_slider()
+        except Exception:
+            pass
     
     def setup_ecg_plot(self):
         """Setup the ECG plot with proper styling"""

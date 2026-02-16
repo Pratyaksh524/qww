@@ -6901,8 +6901,9 @@ class ECGTestPage(QWidget):
         if not is_demo_mode:
             # For real serial data, calculate buffer length based on wave speed
             # Same logic as in update_plots() for serial data
-            # 25 mm/s → 3 s window (≈15 large boxes), scale for other speeds
-            baseline_seconds = 3.0
+            # Set different baseline based on layout mode
+            layout = getattr(self, "_current_overlay_layout", "12x1")
+            baseline_seconds = 3.0 if layout == "6x2" else 6.0
             seconds_scale = (25.0 / max(1e-6, wave_speed))
             seconds_to_show = baseline_seconds * seconds_scale
             
@@ -6919,8 +6920,9 @@ class ECGTestPage(QWidget):
             return max(1, samples_to_show)
 
         # Demo mode: Use same calculation as main 12 lead grid view
-        # 25 mm/s → 3 s window, scale for other speeds
-        baseline_seconds = 3.0
+        # Set different baseline based on layout mode
+        layout = getattr(self, "_current_overlay_layout", "12x1")
+        baseline_seconds = 3.0 if layout == "6x2" else 6.0
         seconds_scale = (25.0 / max(1e-6, wave_speed))
         seconds_to_show = baseline_seconds * seconds_scale
         

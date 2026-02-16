@@ -665,6 +665,7 @@ class ECGMenu(QGroupBox):
             except:
                 pass
             self.sliding_panel.is_animating = False
+            self.cancel_draft_settings()
 
             # Prepare content (wrap in scroll area for short panels)
             target = self.create_scrollable_content(content_widget) if (content_widget and self.sliding_panel.panel_height < 700) else content_widget
@@ -715,8 +716,27 @@ class ECGMenu(QGroupBox):
 
     def hide_sliding_panel(self):
         if self.sliding_panel and self.sliding_panel.is_visible:
+            self.cancel_draft_settings()
             self.sliding_panel.slide_out()
             self.current_open_panel = None
+
+    def set_draft_setting(self, key, value):
+        if not hasattr(self, 'panel_draft') or self.panel_draft is None:
+            self.panel_draft = {}
+        self.panel_draft[key] = value
+
+    def commit_draft_settings(self):
+        if hasattr(self, 'panel_draft') and isinstance(self.panel_draft, dict):
+            for key, value in self.panel_draft.items():
+                try:
+                    self.on_setting_changed(key, value)
+                except Exception as e:
+                    print(f"Commit draft error for {key}: {e}")
+        self.panel_original = dict(self.panel_draft) if hasattr(self, 'panel_draft') else {}
+        self.panel_draft = {}
+
+    def cancel_draft_settings(self):
+        self.panel_draft = {}
 
     # ----------------------------- Save ECG Details-----------------------------
 
@@ -1485,12 +1505,12 @@ class ECGMenu(QGroupBox):
                 'text': 'OK',
                 'action': self.save_working_mode_settings,
                 'style': 'primary'
+            },
+            {
+                'text': 'Cancel',
+                'action': self.hide_sliding_panel,
+                'style': 'danger'
             }
-            # {
-            #     'text': 'Cancel',
-            #     'action': self.hide_sliding_panel,
-            #     'style': 'danger'
-            # }
         ]
         
         return self.create_unified_control_panel("Working Mode Settings", sections, buttons)
@@ -1570,12 +1590,12 @@ class ECGMenu(QGroupBox):
                 'text': 'Save',
                 'action': self.save_report_settings,
                 'style': 'primary'
+            },
+            {
+                'text': 'Cancel',
+                'action': self.hide_sliding_panel,
+                'style': 'danger'
             }
-            # {
-            #     'text': 'Cancel',
-            #     'action': self.hide_sliding_panel,
-            #     'style': 'danger'
-            # }
         ]
         
         return self.create_unified_control_panel("Report Setup", sections, buttons)
@@ -1626,12 +1646,12 @@ class ECGMenu(QGroupBox):
                 'text': 'OK',
                 'action': self.apply_filter_settings,
                 'style': 'primary'
+            },
+            {
+                'text': 'Cancel',
+                'action': self.hide_sliding_panel,
+                'style': 'danger'
             }
-            # {
-            #     'text': 'Cancel',
-            #     'action': self.hide_sliding_panel,
-            #     'style': 'danger'
-            # }
         ]
         
         return self.create_unified_control_panel("Filter Settings", sections, buttons)
@@ -1683,12 +1703,12 @@ class ECGMenu(QGroupBox):
                 'text': 'Save',
                 'action': self.save_system_settings,
                 'style': 'primary'
+            },
+            {
+                'text': 'Cancel',
+                'action': self.hide_sliding_panel,
+                'style': 'danger'
             }
-            # {
-            #     'text': 'Cancel',
-            #     'action': self.hide_sliding_panel,
-            #     'style': 'danger'
-            # }
         ]
         
         return self.create_unified_control_panel("System Setup", sections, buttons)
@@ -2272,6 +2292,17 @@ class ECGMenu(QGroupBox):
         else:
             content_layout.setSpacing(spacing_size)
             content_layout.setContentsMargins(5, 5, 5, 5)
+        try:
+            self.current_panel_keys = [s['setting_key'] for s in sections if 'setting_key' in s]
+            if self.settings_manager:
+                self.panel_original = {k: self.settings_manager.get_setting(k) for k in self.current_panel_keys}
+            else:
+                self.panel_original = {}
+            self.panel_draft = dict(self.panel_original)
+        except Exception as e:
+            print(f"Draft init error: {e}")
+            self.panel_original = {}
+            self.panel_draft = {}
 
         def add_section(section_data):
             # Check if small screen for responsive styling
@@ -2405,7 +2436,7 @@ class ECGMenu(QGroupBox):
                 # Connect to appropriate handler
                 if 'setting_key' in section_data:
                     btn.toggled.connect(lambda checked, v=val, key=section_data['setting_key']: 
-                                     self.on_setting_changed(key, v) if checked else None)
+                                     self.set_draft_setting(key, v) if checked else None)
                 elif 'variable' in section_data:
                     btn.toggled.connect(lambda checked, v=val, var=section_data['variable']: 
                                      var.update({'value': v}) if checked else None)
@@ -2497,7 +2528,16 @@ class ECGMenu(QGroupBox):
                         }}
                     """)
                 
-                btn.clicked.connect(btn_data['action'])
+                def _make_handler(action=btn_data['action'], style=style):
+                    def _handler():
+                        if style == 'primary':
+                            try:
+                                self.commit_draft_settings()
+                            except Exception:
+                                pass
+                        action()
+                    return _handler
+                btn.clicked.connect(_make_handler())
                 btn_layout.addWidget(btn)
 
             layout.addWidget(btn_frame)
