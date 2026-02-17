@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QProgressDialog,
 )
+import sys
+import os
 try:
     from src.utils.cloud_uploader import get_cloud_uploader
 except ImportError:
@@ -28,10 +30,8 @@ except ImportError:
     from src.utils.cloud_uploader import get_cloud_uploader
 from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
-import os
 import json
 import datetime
-import sys
 import shutil
 import requests
 
