@@ -15,9 +15,18 @@ from PyQt5.QtWidgets import (
     QDateEdit,
     QGridLayout,
     QFrame,
+    QFrame,
     QScrollArea,
+    QInputDialog,
+    QProgressDialog,
 )
-from PyQt5.QtCore import Qt, QDate
+try:
+    from src.utils.cloud_uploader import get_cloud_uploader
+except ImportError:
+    # Fallback if run directly or path issues
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from src.utils.cloud_uploader import get_cloud_uploader
+from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 import os
 import json
@@ -36,6 +45,30 @@ REPORTS_DIR = os.path.join(BASE_DIR, "reports")
 # Backend API configuration
 BACKEND_API_URL = "https://your-backend-api.com/api/reports"  # Replace with actual backend URL
 API_TIMEOUT = 30  # seconds
+
+
+class UploadWorker(QThread):
+    """Worker thread for background report upload to prevent UI freeze."""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, uploader, file_path, doctor_name, metadata=None):
+        super().__init__()
+        self.uploader = uploader
+        self.file_path = file_path
+        self.doctor_name = doctor_name
+        self.metadata = metadata
+
+    def run(self):
+        try:
+            result = self.uploader.send_for_doctor_review(
+                self.file_path, 
+                self.doctor_name, 
+                metadata=self.metadata
+            )
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class HistoryWindow(QDialog):
@@ -368,11 +401,106 @@ class HistoryWindow(QDialog):
         btn_row.addWidget(self.close_btn)
 
         layout.addWidget(buttons_frame)
-
+        # Pre-fetch doctor list in background for faster access
+        try:
+            import threading
+            threading.Thread(target=self._prefetch_doctors, daemon=True).start()
+        except Exception as e:
+            print(f"⚠️ Could not start doctor prefetch thread: {e}")
+            
         self.load_history()
         
         # Connect resize event for responsive design
         self.resizeEvent = self.on_resize_event
+
+    def _prefetch_doctors(self):
+        """Fetch doctor list in background to populate cache."""
+        try:
+            uploader = get_cloud_uploader()
+            uploader.get_available_doctors()
+        except Exception:
+            pass  # Silent fail for prefetch
+
+    def select_doctor_from_list(self, doctors, current_doctor=""):
+        """Show a custom scrollable dialog to select a doctor."""
+        from PyQt5.QtWidgets import QListWidget, QListWidgetItem, QAbstractItemView
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Doctor")
+        dialog.setMinimumWidth(350)
+        dialog.setMinimumHeight(400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel("Select doctor to send report to:")
+        label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+        layout.addWidget(label)
+        
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        list_widget.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #f1f3f5;
+            }
+            QListWidget::item:selected {
+                background-color: #007bff;
+                color: white;
+            }
+        """)
+        
+        for doc in doctors:
+            item = QListWidgetItem(doc)
+            list_widget.addItem(item)
+            if doc == current_doctor:
+                item.setSelected(True)
+                list_widget.setCurrentItem(item)
+                
+        layout.addWidget(list_widget)
+        
+        # Search box for fast filtering
+        search_box = QLineEdit()
+        search_box.setPlaceholderText("Search doctor name...")
+        search_box.textChanged.connect(lambda text: self._filter_doctor_list(list_widget, text))
+        layout.addWidget(search_box)
+        
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("Select")
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("background-color: #6c757d;")
+        
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        selected_doctor = [None]
+        
+        def on_ok():
+            current = list_widget.currentItem()
+            if current:
+                selected_doctor[0] = current.text()
+                dialog.accept()
+            else:
+                QMessageBox.warning(dialog, "Selection", "Please select a doctor.")
+                
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn.clicked.connect(dialog.reject)
+        list_widget.itemDoubleClicked.connect(on_ok)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            return selected_doctor[0]
+        return None
+
+    def _filter_doctor_list(self, list_widget, text):
+        """Filter doctor list items based on search text."""
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            item.setHidden(text.lower() not in item.text().lower())
 
     def on_resize_event(self, event):
         """Handle window resize for responsive design."""
@@ -1145,7 +1273,7 @@ class HistoryWindow(QDialog):
             traceback.print_exc()
 
     def send_report_for_review(self):
-        """Send the selected report for review to backend API."""
+        """Send the selected report for review to backend API using CloudUploader."""
         row = self.table.currentRow()
         if row < 0:
             QMessageBox.information(self, "Send for Review", "Please select a report row first.")
@@ -1158,15 +1286,37 @@ class HistoryWindow(QDialog):
                 QMessageBox.warning(self, "Send for Review", "Could not get report details.")
                 return
 
-            # Show confirmation dialog
+            # File path
+            report_file = report_data.get('report_file_path')
+            if not report_file or not os.path.exists(report_file):
+                 QMessageBox.warning(self, "Send for Review", "Report file not found.")
+                 return
+
+            # Get available doctors
+            uploader = get_cloud_uploader()
+            available_doctors = uploader.get_available_doctors()
+            
+            if not available_doctors:
+                QMessageBox.warning(self, "Error", "Could not fetch doctor list.")
+                return
+
+            # Pre-select current doctor if available
+            current_doctor = report_data.get('doctor', '')
+            default_index = 0
+            if current_doctor in available_doctors:
+                default_index = available_doctors.index(current_doctor)
+            
+            # Show selection dialog
+            doctor_name = self.select_doctor_from_list(available_doctors, current_doctor)
+            
+            if not doctor_name:
+                return
+            
+            # Confirmation
             reply = QMessageBox.question(
                 self, 
                 "Send for Review",
-                f"Send the following report for review?\n\n"
-                f"Patient: {report_data['patient_name']}\n"
-                f"Report Type: {report_data['report_type']}\n"
-                f"Date: {report_data['date']}\n"
-                f"Doctor: {report_data['doctor']}",
+                f"Send {report_data['report_type']} report for {report_data['patient_name']} to {doctor_name}?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -1174,31 +1324,64 @@ class HistoryWindow(QDialog):
             if reply == QMessageBox.No:
                 return
 
-            # Show progress
-            QMessageBox.information(self, "Sending", "Sending report for review...")
-            
-            # Send to backend API
-            success = self.send_to_backend_api(report_data)
-            
-            if success:
-                QMessageBox.information(
-                    self, 
-                    "Success", 
-                    "Report sent for review successfully!\n\nThe doctor will be notified."
-                )
-            else:
-                QMessageBox.warning(
-                    self, 
-                    "Failed", 
-                    "Failed to send report for review.\n\nPlease check your internet connection and try again."
-                )
+            # Show non-blocking progress dialog
+            self.progress_dialog = QProgressDialog(f"Uploading report for {doctor_name}...", "Cancel", 0, 0, self)
+            self.progress_dialog.setWindowTitle("Sending Report")
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.show()
+
+            # Create and start worker thread
+            self.upload_worker = UploadWorker(uploader, report_file, doctor_name, metadata=report_data)
+            self.upload_worker.finished.connect(lambda res: self.on_upload_finished(res, row, doctor_name))
+            self.upload_worker.error.connect(self.on_upload_error)
+            self.upload_worker.start()
 
         except Exception as e:
             QMessageBox.critical(
                 self, 
                 "Error", 
-                f"An error occurred while sending the report:\n\n{str(e)}"
+                f"An error occurred: {str(e)}"
             )
+
+    def on_upload_finished(self, result, row, doctor_name):
+        """Handle upload completion from worker thread."""
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.close()
+            
+        if result.get("status") == "success":
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Report sent successfully to {doctor_name}!\n\n{result.get('message')}"
+            )
+            # Update status
+            self.update_review_status(row, "Under Review")
+            
+        elif result.get("status") == "queued":
+             QMessageBox.information(
+                self, 
+                "Queued", 
+                f"Offline: {result.get('message')}"
+            )
+             self.update_review_status(row, "Queued")
+        else:
+            QMessageBox.warning(
+                self, 
+                "Failed", 
+                f"Failed to send report.\n\n{result.get('message')}"
+            )
+
+    def on_upload_error(self, error_msg):
+        """Handle upload error from worker thread."""
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.close()
+            
+        QMessageBox.critical(
+            self, 
+            "Error", 
+            f"An error occurred in background upload: {error_msg}"
+        )
 
     def get_report_data_from_row(self, row):
         """Extract report data from the selected table row."""

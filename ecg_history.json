@@ -19,7 +19,10 @@
     "Org.": "pratyaksh",
     "patient_name": "HARSH THAKUR",
     "date_time": "2025-12-10 14:38:17",
-    "id": 10
+    "id": 10,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2025-12-10",
@@ -121,7 +124,10 @@
     "Org.": "pratyakshhhhhhhhhhh",
     "patient_name": "HARSH THAKURR",
     "date_time": "2025-12-10 15:47:07",
-    "id": 12
+    "id": 12,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2025-12-10",
@@ -153,7 +159,10 @@
     "Org.": "pratyakshhhhhhhhhhh",
     "patient_name": "HARSH THAKURR",
     "date_time": "2025-12-11 10:49:28",
-    "id": 12
+    "id": 12,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2025-12-11",
@@ -265,7 +274,10 @@
     "Org.": "pratyakshhhhhhhhhhh",
     "patient_name": "HARSH THAKURR",
     "date_time": "2025-12-12 10:06:48",
-    "id": 12
+    "id": 12,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2025-12-12",
@@ -569,7 +581,10 @@
     "Org.": "pratyakshhhhhhhhhhh",
     "patient_name": "HARSH THAKURR",
     "date_time": "2025-12-15 09:35:23",
-    "id": 12
+    "id": 12,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2025-12-15",
@@ -3554,7 +3569,10 @@
     "Org.": "Deckmount",
     "patient_name": "google",
     "date_time": "2026-02-12 10:49:27",
-    "id": 14
+    "id": 14,
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": ""
   },
   {
     "date": "2026-02-12",
@@ -3606,5 +3624,417 @@
     "patient_name": "google",
     "date_time": "2026-02-12 11:58:37",
     "id": 14
+  },
+  {
+    "date": "2026-02-16",
+    "time": "14:31:07",
+    "report_type": "12_1 Lead",
+    "username": null,
+    "report_file": "C:\\Users\\DELL\\Downloads\\ECG_Report_12_1_20260216_143057.pdf",
+    "review_status": "Pending",
+    "review_updated_at": "",
+    "review_updated_by": "",
+    "first_name": "google",
+    "last_name": "",
+    "age": "25",
+    "gender": "Male",
+    "doctor": "Divyansh",
+    "doctor_mobile": "5684768946",
+    "Org.": "Deckmount",
+    "patient_name": "google",
+    "date_time": "2026-02-16 14:31:01",
+    "id": 14
+  },
+  {
+    "date": "2026-02-16",
+    "time": "14:44:21",
+    "report_type": "12_1 Lead",
+    "username": null,
+    "report_file": "C:\\Users\\DELL\\Downloads\\ECG_Report_12_1_20260216_144414.pdf",
+    "review_status": "Under Review",
+    "review_updated_at": "2026-02-16T15:51:27.556912",
+    "review_updated_by": "ptr",
+    "first_name": "ffff",
+    "last_name": "",
+    "age": "25",
+    "gender": "Male",
+    "doctor": "Divyansh",
+    "doctor_mobile": "5684768946",
+    "Org.": "Deckmount",
+    "patient_name": "ffff",
+    "date_time": "2026-02-16 14:44:16",
+    "id": 15
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:39:12",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_143908.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
+  },
+  {
+    "date": "2025-12-10",
+    "time": "14:24:44",
+    "report_type": "Hyperkalemia",
+    "report_file": "/Users/indresh/Downloads/Hyperkalemia_Report_20251210_142439.pdf"
   }
 ]
