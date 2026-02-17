@@ -1,18 +1,19 @@
 {
-  "timestamp": "2026-02-16 14:25:22",
+  "timestamp": "2026-02-16 15:58:47",
   "findings": [
-    "Rhythm Analysis",
-    "Tachycardia detected",
-    "Normal PR interval",
+    "Extreme Tachycardia",
+    "Short PR interval",
     "Normal QRS duration",
-    "Slightly prolonged QTc",
+    "Prolonged QTc interval",
     "Low HRV"
   ],
   "recommendations": [
-    "Review detected arrhythmia pattern, consult physician if persistent",
-    "Monitor symptoms, consider medical evaluation if persistent",
-    "Ensure adequate hydration and rest",
-    "Monitor, may be normal variant or medication effect",
+    "Immediate medical attention required - may indicate SVT, VT, or severe stress",
+    "Check for symptoms: chest pain, dizziness, shortness of breath",
+    "Monitor for accessory pathway patterns, consult if symptomatic",
+    "May be associated with WPW syndrome",
+    "Immediate medical evaluation - risk of Torsades de Pointes",
+    "Review medications that may prolong QT interval",
     "Ensure adequate rest and stress management",
     "Consider relaxation techniques, adequate sleep, and regular exercise"
   ]

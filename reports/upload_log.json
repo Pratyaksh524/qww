@@ -45749,5 +45749,53 @@
       "machine_serial": "",
       "heart_rate": "159"
     }
+  },
+  {
+    "local_path": "test_report.pdf",
+    "uploaded_at": "2026-02-16T14:36:25.247904",
+    "service": "s3",
+    "result": {
+      "status": "success"
+    },
+    "metadata": {
+      "type": "doctor_review",
+      "doctor": "Dr. Test"
+    }
+  },
+  {
+    "local_path": "test_report.pdf",
+    "uploaded_at": "2026-02-16T14:49:05.480632",
+    "service": "s3",
+    "result": {
+      "status": "success"
+    },
+    "metadata": {
+      "type": "doctor_review",
+      "doctor": "Dr. Test"
+    }
+  },
+  {
+    "local_path": "test_report.pdf",
+    "uploaded_at": "2026-02-16T14:56:05.639954",
+    "service": "s3",
+    "result": {
+      "status": "success"
+    },
+    "metadata": {
+      "type": "doctor_review",
+      "doctor": "Dr. Test"
+    }
+  },
+  {
+    "local_path": "test_report.pdf",
+    "uploaded_at": "2026-02-16T14:56:31.095904",
+    "service": "s3",
+    "result": {
+      "status": "success"
+    },
+    "metadata": {
+      "type": "doctor_review",
+      "doctor": "Dr. Test"
+    }
   }
 ]
