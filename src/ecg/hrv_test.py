@@ -667,9 +667,9 @@ class HRVTestWindow(QWidget):
                     num_samples = len(buffer_data)
                     if self.sampling_rate > 0:
                         time_axis = np.arange(num_samples) / self.sampling_rate
-                        # Show last 10 seconds
+                        # Show last 15 seconds
                         max_time = time_axis[-1] if len(time_axis) > 0 else 0
-                        min_time = max(0, max_time - 10)
+                        min_time = max(0, max_time - 15)
                         mask = time_axis >= min_time
                         display_times = time_axis[mask].tolist()
                         display_values = buffer_data[mask].tolist()
@@ -679,7 +679,7 @@ class HRVTestWindow(QWidget):
                         values = [d['value'] for d in self.captured_data]
                         if len(times) > 0:
                             max_time = max(times)
-                            min_time = max(0, max_time - 10)
+                            min_time = max(0, max_time - 15)
                             display_times = [t for t in times if t >= min_time]
                             display_values = [v for i, v in enumerate(values) if times[i] >= min_time]
                         else:
@@ -691,7 +691,7 @@ class HRVTestWindow(QWidget):
                     values = [d['value'] for d in self.captured_data]
                     if len(times) > 0:
                         max_time = max(times)
-                        min_time = max(0, max_time - 10)
+                        min_time = max(0, max_time - 15)
                         display_times = [t for t in times if t >= min_time]
                         display_values = [v for i, v in enumerate(values) if times[i] >= min_time]
                     else:
@@ -911,21 +911,13 @@ class HRVTestWindow(QWidget):
                 "Heart_Rate": hr_value,
             }
 
-            # Ensure we feed exactly 1-minute of samples (30000 at 500 Hz) when available
-            max_samples = int((self.sampling_rate or 500) * 60 * 5)
-            raw_data_for_report = self.captured_data[-max_samples:] if len(self.captured_data) >= max_samples else self.captured_data
-            if len(raw_data_for_report) > 0:
-                t0 = raw_data_for_report[0]['time']
-                raw_data_for_report = [
-                    {'time': float(d['time']) - float(t0), 'value': float(d['value'])}
-                    for d in raw_data_for_report
-                ]
+            scaled_captured_data = [{'time': d['time'], 'value': float(d['value'])} for d in self.captured_data]
             
             # Generate report using the COMPLETE format (same as main ECG report)
             # This includes: Patient Details, Observation, Conclusions, and 5 one-minute Lead II graphs
             result = generate_hrv_ecg_report(
                 filename=filepath,
-                captured_data=raw_data_for_report,
+                captured_data=scaled_captured_data,
                 data=data,
                 patient=patient,
                 settings_manager=self.settings_manager,
@@ -953,7 +945,7 @@ class HRVTestWindow(QWidget):
             )
 
     def calculate_time_domain_hrv_metrics(self):
-        """c
+        """
         Calculate time‑domain HRV metrics from the full selected lead capture.
         
         Returns a dict with:
@@ -1008,13 +1000,11 @@ class HRVTestWindow(QWidget):
             # R‑R intervals in milliseconds
             rr_intervals = np.diff(peaks) * (1000.0 / fs)
 
-            rr = rr_intervals[(rr_intervals > 300.0) & (rr_intervals < 1500.0)]
-            print("Pratyaksh rr[:50]:", rr[:50])
+            rr = rr_intervals[(rr > 300.0) & (rr < 1500.0)]
+            print(rr[:50])
             print(np.abs(np.diff(rr))[:50])
             if rr.size < 2:
                 return None
-
-            print("Pratyaksh rr:", rr)
 
             median_rr = np.median(rr)
             mask = np.abs(rr - median_rr) < 0.2 * median_rr
@@ -1032,8 +1022,6 @@ class HRVTestWindow(QWidget):
             rmssd_ms = float(np.sqrt(np.mean(diff_rr ** 2)))
             nn50 = int(np.sum(np.abs(diff_rr) > 50.0))
             pnn50 = float((nn50 / len(diff_rr)) * 100.0) if len(diff_rr) > 0 else 0.0
-
-            print(f" Pratyaksh mean_rr_ms: {mean_rr_ms}, sdnn_ms: {sdnn_ms}, rmssd_ms: {rmssd_ms}, nn50: {nn50}, pnn50: {pnn50}, num_intervals: {int(valid_rr.size)}")
 
             return {
                 "mean_rr_ms": mean_rr_ms,

@@ -2910,127 +2910,72 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
             e = s + remainder_samples
             minute_value_arrays_pre.append(values_all_pre[s:e])
             num_minutes_exact_pre += 1
-        for seg_idx in range(num_minutes_exact_pre):
-            seg_values = minute_value_arrays_pre[seg_idx]
-            if seg_values.size > 100:
-                vals = seg_values.astype(float)
-                if np.std(vals) < 1e-6:
-                    hr_val = data.get('HR_avg', 80)
-                    rr_val = 60000 / hr_val if hr_val > 0 else 750
-                    hr_per_minute_for_report.append(hr_val)
-                    avg_rr_per_minute.append(rr_val)
-                    continue
-                vals_norm = (vals - np.mean(vals)) / (np.std(vals) + 1e-6)
-                sig_std = np.std(vals_norm)
-                if sig_std == 0:
-                    hr_val = data.get('HR_avg', 80)
-                    rr_val = 60000 / hr_val if hr_val > 0 else 750
-                    hr_per_minute_for_report.append(hr_val)
-                    avg_rr_per_minute.append(rr_val)
-                    continue
-                from scipy.signal import find_peaks
-                ht = np.percentile(vals_norm, 75)
-                if ht < 0.2:
-                    ht = 0.2
-                elif ht > 0.5:
-                    ht = 0.5
-                min_dist = int(0.25 * sampling_rate)
-                min_width = int(0.02 * sampling_rate)
-                peaks, _ = find_peaks(
-                    vals_norm,
-                    distance=min_dist,
-                    prominence=sig_std * 0.6,
-                    height=ht,
-                    width=(min_width, None)
-                )
-                if len(peaks) < 2:
-                    peaks_inv, _ = find_peaks(
-                        -vals_norm,
-                        distance=min_dist,
-                        prominence=sig_std * 0.6,
-                        height=ht,
-                        width=(min_width, None)
-                    )
-                    if len(peaks_inv) >= 2:
-                        peaks = peaks_inv
-                if len(peaks) < 2:
-                    hr_val = data.get('HR_avg', 80)
-                    rr_val = 60000 / hr_val if hr_val > 0 else 750
-                    hr_per_minute_for_report.append(hr_val)
-                    avg_rr_per_minute.append(rr_val)
-                    continue
-                rr_ms = np.diff(peaks) * (1000.0 / sampling_rate)
-                rr_ms = rr_ms[(rr_ms >= 250.0) & (rr_ms <= 2000.0)]
-                if rr_ms.size < 2:
-                    hr_val = data.get('HR_avg', 80)
-                    rr_val = 60000 / hr_val if hr_val > 0 else 750
-                    hr_per_minute_for_report.append(hr_val)
-                    avg_rr_per_minute.append(rr_val)
-                    continue
-                low = float(np.percentile(rr_ms, 5))
-                high = float(np.percentile(rr_ms, 95))
-                rr_final = rr_ms[(rr_ms >= low) & (rr_ms <= high)]
-                if rr_final.size < 2:
-                    rr_final = rr_ms
-                avg_rr = float(np.mean(rr_final))
-                hr_val = 60000 / avg_rr if avg_rr > 0 else data.get('HR_avg', 80)
+        segments_pre = minute_value_arrays_pre
+    else:
+        # Short recording (<1 minute): treat entire available data as single segment
+        segments_pre = [values_all_pre] if total_samples_pre > 100 else []
+        num_minutes_exact_pre = len(segments_pre)
+    
+    rr_debug_dir = os.path.join(reports_dir, "rr_debug")
+    try:
+        os.makedirs(rr_debug_dir, exist_ok=True)
+        rr_debug_path = os.path.join(rr_debug_dir, "rr_ms_all.txt")
+    except Exception:
+        rr_debug_path = None
+    
+    for seg_idx in range(num_minutes_exact_pre):
+        seg_values = segments_pre[seg_idx]
+        if seg_values.size > 100:
+            vals = seg_values.astype(float)
+            if np.std(vals) < 1e-6:
+                continue
+            from ecg.pan_tompkins import pan_tompkins
+            peaks = pan_tompkins(vals, fs=sampling_rate)
+            if len(peaks) < 2:
+                continue
+            rr_ms = np.diff(peaks) * (1000.0 / sampling_rate)
+            rr_ms = rr_ms[(rr_ms >= 200.0) & (rr_ms <= 3000.0)]
+            if rr_ms.size < 1:
+                continue
+            if rr_debug_path:
+                try:
+                    with open(rr_debug_path, "a") as f:
+                        f.write(f"early_min={seg_idx+1}\n")
+                        for v in rr_ms:
+                            f.write(f"{float(v):.2f}\n")
+                except Exception:
+                    pass
+            avg_rr = float(np.mean(rr_ms))
+            hr_val = 60000 / avg_rr if avg_rr > 0 else 0
+            if hr_val > 0:
                 hr_per_minute_for_report.append(hr_val)
                 avg_rr_per_minute.append(avg_rr)
-            else:
-                hr_val = data.get('HR_avg', 80)
-                rr_val = 60000 / hr_val if hr_val > 0 else 750
-                hr_per_minute_for_report.append(hr_val)
-                avg_rr_per_minute.append(rr_val)
-    else:
-        # Use available data count; if any data present, treat as 1 minute only
-        minutes_available = 1 if total_samples_pre > 0 else 0
-        hr_per_minute_for_report = [data.get('HR_avg', 80)] * minutes_available
-        fallback_rr = 60000 / data.get('HR_avg', 80) if data.get('HR_avg', 80) > 0 else 750
-        avg_rr_per_minute = [fallback_rr] * minutes_available
     
     # Use available minutes only (no padding to 5)
     
-    # NEW CALCULATION: HR = (N * 60000) / sum_of_avg_rr_per_minute
+    # NEW CALCULATION: HR = mean of per-minute HR values
     # N = number of available minutes
-    if len(avg_rr_per_minute) >= 1:
-        sum_of_avg_rr = sum(avg_rr_per_minute)  # Sum of available average RR values
-        minutes_count = len(avg_rr_per_minute)
-        avg_hr_from_5_minutes = (minutes_count * 60000) / sum_of_avg_rr if sum_of_avg_rr > 0 else data.get('HR_avg')
+    if len(hr_per_minute_for_report) >= 1:
+        hr_values = [h for h in hr_per_minute_for_report if h and h > 0]
+        if len(hr_values) > 0:
+            avg_hr_from_5_minutes = float(np.mean(hr_values))
+        else:
+            avg_hr_from_5_minutes = 0
         
-        print(f"📊 HRV-Specific Heart Rate Calculation (NEW METHOD - 300000 / sum of avg RR per minute):")
+        print(f"📊 HRV-Specific Heart Rate Calculation (mean of per-minute HR values):")
         print(f"   Original HR_bpm from metrics.json (12-lead ECG): {original_hr_bpm_from_metrics} bpm (NOT CHANGED)")
         print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   Average RR per minute: {[round(r, 1) for r in avg_rr_per_minute]} ms")
-        print(f"   Sum of {minutes_count} average RR values: {sum_of_avg_rr:.2f} ms")
-        print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   NEW Formula: HR = ({minutes_count} * 60000) / sum_of_avg_rr_per_minute")
-        print(f"   Calculation: ({minutes_count}*60000) / {sum_of_avg_rr:.2f} = {avg_hr_from_5_minutes:.2f} bpm")
-        print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   Per-minute HR values (for reference):")
+        print(f"   Per-minute HR values:")
         for i, hr_val in enumerate(hr_per_minute_for_report):
             print(f"   Min {i+1}: {hr_val:.2f} bpm")
         print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   ✅ HRV-Specific BPM: {round(avg_hr_from_5_minutes)} bpm (WILL BE SAVED to metrics.json as HR_bpm)")
+        print(f"   Calculation: mean(per-minute HR values) = {avg_hr_from_5_minutes:.2f} bpm")
+        print(f"   ✅ HRV-Specific BPM: {round(avg_hr_from_5_minutes) if avg_hr_from_5_minutes > 0 else 0} bpm (WILL BE SAVED to metrics.json as HR_bpm)")
         print(f"   ✅ Original 12-lead ECG HR_bpm: {original_hr_bpm_from_metrics} bpm (saved as Original_HR_bpm for reference)\n")
     else:
-        # Fallback to old method if no average RR values found
-        if len(avg_rr_per_minute) >= 1:
-            sum_of_avg_rr = sum(avg_rr_per_minute)
-            minutes_count = len(avg_rr_per_minute)
-            avg_hr_from_5_minutes = (minutes_count * 60000) / sum_of_avg_rr if sum_of_avg_rr > 0 else data.get('HR_avg', 80)
-        else:
-            avg_hr_from_5_minutes = np.mean(hr_per_minute_for_report) if len(hr_per_minute_for_report) > 0 else data.get('HR_avg', 80)
-        print(f"⚠️ Using fallback method: {avg_hr_from_5_minutes:.2f} bpm")
-        print(f"   Original HR_bpm from metrics.json (12-lead ECG): {original_hr_bpm_from_metrics} bpm (NOT CHANGED)")
-        print(f"   ─────────────────────────────────────────────────────────────")
-        for i, hr_val in enumerate(hr_per_minute_for_report):
-            print(f"   Min {i+1}: {hr_val:.2f} bpm")
-        print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   HRV Average HR (fallback): {avg_hr_from_5_minutes:.2f} bpm")
-        print(f"   Calculation: mean(per-minute HR values) = {avg_hr_from_5_minutes:.2f} bpm")
-        print(f"   ─────────────────────────────────────────────────────────────")
-        print(f"   ✅ HRV-Specific BPM: {round(avg_hr_from_5_minutes)} bpm (WILL BE SAVED to metrics.json as HR_bpm)")
-        print(f"   ✅ Original 12-lead ECG HR_bpm: {original_hr_bpm_from_metrics} bpm (saved as Original_HR_bpm for reference)\n")
+        avg_hr_from_5_minutes = 0
+        print(f"⚠️ No valid per-minute HR values available for HRV-specific BPM calculation")
+        print(f"   Original HR_bpm from metrics.json (12-lead ECG): {original_hr_bpm_from_metrics} bpm (NOT CHANGED)\n")
     
     # Save HRV-specific BPM separately (for Page 3 only)
     hrv_specific_bpm = round(avg_hr_from_5_minutes)
@@ -3813,66 +3758,28 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
     total_samples = len(values_all)
     num_minutes_exact = min(5, total_samples // per_minute_samples)
     minute_value_arrays = []
-    for i in range(num_minutes_exact):
-        start = i * per_minute_samples
-        end = start + per_minute_samples
-        minute_value_arrays.append(values_all[start:end])
+    if num_minutes_exact >= 1:
+        for i in range(num_minutes_exact):
+            start = i * per_minute_samples
+            end = start + per_minute_samples
+            minute_value_arrays.append(values_all[start:end])
+    elif total_samples > 100:
+        num_minutes_exact = 1
+        minute_value_arrays.append(values_all)
+    
     for seg_idx in range(num_minutes_exact):
         seg_values = minute_value_arrays[seg_idx]
         if seg_values.size > 100:
-            from scipy.signal import find_peaks
             vals = seg_values.astype(float)
             if np.std(vals) < 1e-6:
-                hr_val = data.get('HR_avg', 80)
-                rr_val = 60000 / hr_val if hr_val > 0 else 750
-                rr_per_minute.append(rr_val)
-                hr_per_minute.append(hr_val)
                 continue
-            vals_norm = (vals - np.mean(vals)) / (np.std(vals) + 1e-6)
-            sig_std = np.std(vals_norm)
-            if sig_std == 0:
-                hr_val = data.get('HR_avg', 80)
-                rr_val = 60000 / hr_val if hr_val > 0 else 750
-                rr_per_minute.append(rr_val)
-                hr_per_minute.append(hr_val)
-                continue
-            ht = np.percentile(vals_norm, 75)
-            if ht < 0.2:
-                ht = 0.2
-            elif ht > 0.5:
-                ht = 0.5
-            min_dist = int(0.25 * sampling_rate)
-            min_width = int(0.02 * sampling_rate)
-            peaks, _ = find_peaks(
-                vals_norm,
-                distance=min_dist,
-                prominence=sig_std * 0.6,
-                height=ht,
-                width=(min_width, None)
-            )
+            from ecg.pan_tompkins import pan_tompkins
+            peaks = pan_tompkins(vals, fs=sampling_rate)
             if len(peaks) < 2:
-                peaks_inv, _ = find_peaks(
-                    -vals_norm,
-                    distance=min_dist,
-                    prominence=sig_std * 0.6,
-                    height=ht,
-                    width=(min_width, None)
-                )
-                if len(peaks_inv) >= 2:
-                    peaks = peaks_inv
-            if len(peaks) < 2:
-                hr_val = data.get('HR_avg', 80)
-                rr_val = 60000 / hr_val if hr_val > 0 else 750
-                rr_per_minute.append(rr_val)
-                hr_per_minute.append(hr_val)
                 continue
             rr_ms = np.diff(peaks) * (1000.0 / sampling_rate)
-            rr_ms = rr_ms[(rr_ms >= 250.0) & (rr_ms <= 2000.0)]
-            if rr_ms.size < 2:
-                hr_val = data.get('HR_avg', 80)
-                rr_val = 60000 / hr_val if hr_val > 0 else 750
-                rr_per_minute.append(rr_val)
-                hr_per_minute.append(hr_val)
+            rr_ms = rr_ms[(rr_ms >= 200.0) & (rr_ms <= 3000.0)]
+            if rr_ms.size < 1:
                 continue
             rr_all_for_hrv.extend(rr_final.tolist())
             low = float(np.percentile(rr_ms, 5))
@@ -3881,12 +3788,12 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
             if rr_final.size < 2:
                 rr_final = rr_ms
             avg_rr = float(np.mean(rr_final))
-            hr_val = 60000 / avg_rr if avg_rr > 0 else data.get('HR_avg', 80)
+            hr_val = 60000 / avg_rr if avg_rr > 0 else data.get('HR_avg', 0)
             rr_per_minute.append(avg_rr)
             hr_per_minute.append(hr_val)
         else:
-            hr_val = data.get('HR_avg', 80)
-            rr_val = 60000 / hr_val if hr_val > 0 else 750
+            hr_val = data.get('HR_avg', 0)
+            rr_val = 60000 / hr_val if hr_val > 0 else 0
             rr_per_minute.append(rr_val)
             hr_per_minute.append(hr_val)
     
@@ -3897,7 +3804,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
     if len(rr_per_minute) >= 1:
         sum_of_avg_rr_page2 = sum(rr_per_minute)
         minutes_count_page2 = len(rr_per_minute)
-        avg_hr_from_sum = (minutes_count_page2 * 60000) / sum_of_avg_rr_page2 if sum_of_avg_rr_page2 > 0 else data.get('HR_avg', 80)
+        avg_hr_from_sum = (minutes_count_page2 * 60000) / sum_of_avg_rr_page2 if sum_of_avg_rr_page2 > 0 else 0
         print(f"\n{'='*70}")
         print(f"📊 PAGE 2: NEW Average HR Calculation ((N*60000) / sum of avg RR per minute)")
         print(f"{'='*70}")
@@ -3920,7 +3827,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         calculated_hr = 60000 / rr_val if rr_val > 0 else 0
         diff = abs(calculated_hr - hr_val)
         verification = "✅ CORRECT" if diff < 0.5 else f"⚠️ DIFF: {diff:.2f}"
-        status = "✅ Dynamic" if rr_val != 750 or hr_val != 80 else "⚠️ Default"
+        status = "✅ Dynamic" if (rr_val > 0 and hr_val > 0) else "⚠️ Default/Zero"
         
         formula_text = f"60000/{rr_val:.0f}={calculated_hr:.1f}"
         print(f"Min {i+1:<4} {rr_val:<12.2f} {hr_val:<12.2f} {formula_text:<25} {verification} ({status})")
@@ -4113,9 +4020,9 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         rmssd = float(np.sqrt(np.mean(np.diff(rr_for_metrics) ** 2)))
         nn50_count = int(np.sum(np.abs(np.diff(rr_for_metrics)) > 50))
         pnn50 = (nn50_count / len(rr_for_metrics)) * 100 if len(rr_for_metrics) > 0 else 0
-        mean_hr_calc = 60000 / average_nn_intervals if average_nn_intervals and average_nn_intervals > 0 else 80
+        mean_hr_calc = 60000 / average_nn_intervals if average_nn_intervals and average_nn_intervals > 0 else 0
     else:
-        sdnn, rmssd, nn50_count, pnn50, mean_hr_calc = 0.01, 0.22, 0, 0.0, 80
+        sdnn, rmssd, nn50_count, pnn50, mean_hr_calc = 0.00, 0.00, 0, 0.0, 0
         rr_intervals_calc = None
         average_nn_intervals = None
         sdann = None
@@ -4506,3 +4413,4 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
 
 # ==================== END OF HRV ECG REPORT GENERATION ====================
  
+# Hrv___avg _rrand avg_hr done completeely same. ..
