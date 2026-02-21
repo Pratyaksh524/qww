@@ -257,6 +257,33 @@ def calculate_time_window_from_width_points(wave_speed_mm_s, width_points):
     effective_wave_speed_mm_s = wave_speed_mm_s * ECG_SPEED_SCALE
     return width_mm / max(1e-6, effective_wave_speed_mm_s)
 
+def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
+    from ecg.ecg_filters import apply_ecg_filters, apply_baseline_wander_median_mean
+    arr = np.asarray(signal, dtype=float)
+    if arr.size < 10:
+        return arr
+    dft_setting = str(settings_manager.get_setting("filter_dft", "off")).strip()
+    emg_setting = str(settings_manager.get_setting("filter_emg", "off")).strip()
+    ac_setting = str(settings_manager.get_setting("filter_ac", "off")).strip()
+    dft_param = dft_setting if dft_setting not in ("off", "") else None
+    emg_param = emg_setting if emg_setting not in ("off", "") else None
+    ac_param = ac_setting if ac_setting not in ("off", "") else None
+    filtered = apply_ecg_filters(
+        arr,
+        sampling_rate=float(sampling_rate),
+        ac_filter=ac_param,
+        emg_filter=emg_param,
+        dft_filter=dft_param,
+    )
+    filtered = apply_baseline_wander_median_mean(filtered, float(sampling_rate))
+    try:
+        if filtered.size > 5:
+            from scipy.ndimage import gaussian_filter1d
+            filtered = gaussian_filter1d(filtered, sigma=0.8)
+    except Exception:
+        pass
+    return filtered
+
 def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
     """
     Create ECG graph with pink grid background and dark ECG waveform
@@ -1846,17 +1873,7 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 adc_data = np.array(real_ecg_data, dtype=float)
 
                 try:
-                    from ecg.ecg_filters import apply_dft_filter, apply_emg_filter, apply_ac_filter, apply_baseline_wander_median_mean
-                    dft_setting = str(settings_manager.get_setting("filter_dft", "off")).strip()
-                    emg_setting = str(settings_manager.get_setting("filter_emg", "off")).strip()
-                    ac_setting = str(settings_manager.get_setting("filter_ac", "off")).strip()
-                    if dft_setting not in ("off", ""):
-                        adc_data = apply_dft_filter(adc_data, float(computed_sampling_rate), dft_setting)
-                    if emg_setting not in ("off", ""):
-                        adc_data = apply_emg_filter(adc_data, float(computed_sampling_rate), emg_setting)
-                    if ac_setting in ("50", "60"):
-                        adc_data = apply_ac_filter(adc_data, float(computed_sampling_rate), ac_setting)
-                    adc_data = apply_baseline_wander_median_mean(adc_data, float(computed_sampling_rate))
+                    adc_data = apply_report_ecg_filters(adc_data, float(computed_sampling_rate), settings_manager)
                 except Exception as filter_err:
                     print(f" Report filter apply failed for {lead}: {filter_err}")
                 
