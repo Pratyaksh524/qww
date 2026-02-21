@@ -405,6 +405,11 @@ class HistoryWindow(QDialog):
         self.open_cloud_preview_btn.clicked.connect(self.open_cloud_preview_selected)
         btn_row.addWidget(self.open_cloud_preview_btn)
 
+        self.open_reviewed_list_btn = QPushButton(" Reviewed List")
+        self.open_reviewed_list_btn.setMinimumHeight(40)
+        self.open_reviewed_list_btn.clicked.connect(self.open_reviewed_reports_window)
+        btn_row.addWidget(self.open_reviewed_list_btn)
+
         btn_row.addStretch(1)
 
         self.close_btn = QPushButton(" Close")
@@ -1304,6 +1309,13 @@ class HistoryWindow(QDialog):
         if not self._open_reviewed_report_via_api(patient, date_str):
             QMessageBox.information(self, "Cloud Preview", "No reviewed report found for this row.")
 
+    def open_reviewed_reports_window(self):
+        try:
+            dlg = ReviewedReportsDialog(parent=self)
+            dlg.exec_()
+        except Exception:
+            QMessageBox.information(self, "Reviewed Reports", "Could not open reviewed reports window.")
+
     def export_all_reports(self):
         """Export all saved reports from history to a user-selected directory."""
         # Ask user where to save the exported reports
@@ -1612,6 +1624,102 @@ class HistoryWindow(QDialog):
             print(f"API call error: {e}")
             return False
 
+
+class ReviewedReportsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Reviewed Reports")
+        self.setMinimumSize(800, 600)
+        v = QVBoxLayout(self)
+        h = QHBoxLayout()
+        self.doctor_combo = QComboBox()
+        self.refresh_btn = QPushButton("Refresh")
+        self.open_btn = QPushButton("Open Selected")
+        self.copy_btn = QPushButton("Copy Link")
+        h.addWidget(QLabel("Doctor"))
+        h.addWidget(self.doctor_combo)
+        h.addWidget(self.refresh_btn)
+        h.addWidget(self.open_btn)
+        h.addWidget(self.copy_btn)
+        v.addLayout(h)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Date", "Time", "Patient", "Type", "Filename", "URL"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self.table)
+        try:
+            uploader = get_cloud_uploader()
+            doctors = uploader.get_available_doctors()
+        except Exception:
+            doctors = ['Dr_Rohit', 'Dr_Neha', 'Dr_Arjun', 'Dr_Simran', 'Dr_Kabir']
+        self.doctor_combo.addItems(doctors or [])
+        self.refresh_btn.clicked.connect(self.refresh_list)
+        self.open_btn.clicked.connect(self.open_selected)
+        self.copy_btn.clicked.connect(self.copy_selected)
+        if self.doctor_combo.count() > 0:
+            self.refresh_list()
+
+    def refresh_list(self):
+        dname = self.doctor_combo.currentText().strip()
+        rows = []
+        try:
+            params = {}
+            if dname:
+                params["doctorName"] = dname
+            resp = requests.get(PUBLIC_REVIEWED_REPORTS_URL, params=params, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json() if "application/json" in resp.headers.get("Content-Type", "") else []
+                if isinstance(data, list):
+                    for entry in data:
+                        date = str(entry.get("date", ""))
+                        time = str(entry.get("time", ""))
+                        patient = str(entry.get("patient", entry.get("name", "")))
+                        rtype = str(entry.get("report_type", entry.get("type", "")))
+                        filename = str(entry.get("filename", ""))
+                        url = entry.get("preview_url") or entry.get("file_url") or entry.get("url") or ""
+                        rows.append((date, time, patient, rtype, filename, url))
+        except Exception:
+            pass
+        self.table.setRowCount(0)
+        for r in rows:
+            i = self.table.rowCount()
+            self.table.insertRow(i)
+            for c, val in enumerate(r):
+                item = QTableWidgetItem(val)
+                if c == 5:
+                    item.setData(Qt.UserRole, val)
+                self.table.setItem(i, c, item)
+
+    def open_selected(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Open", "Select a row.")
+            return
+        item = self.table.item(row, 5)
+        url = item.data(Qt.UserRole) if item else ""
+        if not url:
+            QMessageBox.information(self, "Open", "No URL in selected row.")
+            return
+        try:
+            webbrowser.open(url)
+        except Exception:
+            QMessageBox.information(self, "Open", "Failed to open URL.")
+
+    def copy_selected(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Copy", "Select a row.")
+            return
+        item = self.table.item(row, 5)
+        url = item.data(Qt.UserRole) if item else ""
+        if not url:
+            QMessageBox.information(self, "Copy", "No URL in selected row.")
+            return
+        try:
+            from PyQt5.QtWidgets import QApplication
+            QApplication.clipboard().setText(url)
+            QMessageBox.information(self, "Copy", "Link copied.")
+        except Exception:
+            pass
 
 def append_history_entry(patient_details, report_file_path, report_type="ECG", username=None):
     """Append a new history entry when a report is generated."""
