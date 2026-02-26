@@ -5526,119 +5526,18 @@ class ECGTestPage(QWidget):
                     # If we can't list ports, assume we need to scan or just try the configured one
                     pass
 
-            if scan_needed:
-                print(" Scanning all COM ports for ECG device...")
-                try:
-                    scan_result = SerialStreamReader.scan_and_detect_port(baudrate=baud_int, timeout=0.2)
-                    if scan_result:
-                        detected_port, detected_serial = scan_result
-                        port_to_use = detected_port
-                        print(f" Auto‑detected ECG device on port {detected_port} (START ACK received)")
-                        
-                        # IMPORTANT: Close the detected serial object because SerialStreamReader will open its own
-                        try:
-                            if detected_serial and detected_serial.is_open:
-                                detected_serial.close()
-                        except Exception as e:
-                            print(f" Warning: Failed to close detected serial port: {e}")
-
-                        # Remember working port in settings
-                        if hasattr(self, 'settings_manager'):
-                            self.settings_manager.set_serial_port(detected_port)
-                except Exception as scan_err:
-                    print(f" Port scan failed, falling back to configured port {port}: {scan_err}")
-            else:
-                print(f" Using configured port {port_to_use}, skipping auto-scan.")
-
-            try:
-                # Use GlobalHardwareManager to get the shared SerialStreamReader
-                from ecg.serial.serial_reader import GlobalHardwareManager
-                self.serial_reader = GlobalHardwareManager().get_reader(port_to_use, baud_int)
-                # Pass user details to serial reader for error reporting (already set in __init__)
-                if hasattr(self, 'user_details'):
-                    self.serial_reader.user_details = self.user_details
-                    
-                # If it's already running, we don't need to send START again
-                self.serial_reader.start()
-                print(f" Serial connection established successfully on {port_to_use}!")
-
-            except Exception as e:
-                print(f" Failed to connect to port {port_to_use}: {e}")
-                raise e
-            
-            # OPTIMIZED: Timer interval for smooth wave display matching standalone script (50Hz)
-            # At 500 Hz, we get 500 packets/second = 10 packets per 20ms timer interval
-            # Using 20ms (50 FPS) for smooth, jitter-free wave flow matching standalone plotting
-            timer_interval = 20  # 50 FPS - matches standalone script
-            # Using default timer type - works fine in EXE with proper interval
-            self.timer.start(timer_interval)
-            # INSTANT DISPLAY: Trigger immediate first update to show waves right away
-            QTimer.singleShot(10, self.update_plots)  # Update after 10ms for instant display
-            if hasattr(self, '_12to1_timer'):
-                self._12to1_timer.start(100)
-            
-            # Reset update timestamps and counters for immediate metric updates (within 10 seconds requirement)
-            if hasattr(self, '_last_metric_update_ts'):
-                self._last_metric_update_ts = 0.0
-            if hasattr(self, '_metrics_calculated_once'):
-                delattr(self, '_metrics_calculated_once')  # Reset to allow immediate first update
-            if hasattr(self, '_metrics_update_count'):
-                self._metrics_update_count = 0  # Reset counter for immediate calculations
-            
-            # Reset dashboard update timestamp for immediate sync
-            if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
-                if hasattr(self.dashboard_instance, '_last_metrics_update_ts'):
-                    self.dashboard_instance._last_metrics_update_ts = 0.0
-                if hasattr(self.dashboard_instance, '_inactive_update_count'):
-                    self.dashboard_instance._inactive_update_count = 0
-                # Force immediate dashboard update
-                try:
-                    self.dashboard_instance.update_dashboard_metrics_from_ecg()
-                    print("✅ Immediate dashboard update triggered on acquisition start")
-                except Exception as e:
-                    print(f"⚠️ Dashboard immediate update failed: {e}")
-            
-            # Update recording button state now that acquisition is running
-            self.update_recording_button_state()
-            print(f"[DEBUG] ECGTestPage - Timer active: {self.timer.isActive()}")
-            print(f"[DEBUG] ECGTestPage - Number of leads: {len(self.leads)}")
-            print(f"[DEBUG] ECGTestPage - Number of plot widgets: {len(self.plot_widgets)}")
-            print(f"[DEBUG] ECGTestPage - Number of data lines: {len(self.data_lines)}")
-
-            # Start elapsed time tracking (resume from previous time if paused)
-            current_time = time.time()
-            if not hasattr(self, 'start_time') or self.start_time is None:
-                # First start - set start time
-                self.start_time = current_time
-                if hasattr(self, 'paused_duration'):
-                    self.paused_duration = 0
-                self.paused_at = None
-                print(" Session timer started (first time)")
-            else:
-                # Resuming from pause - accumulate paused time
-                if hasattr(self, 'paused_at') and self.paused_at is not None:
-                    # Calculate how long we were paused
-                    pause_duration = current_time - self.paused_at
-                    # Add to total paused duration
-                    if not hasattr(self, 'paused_duration') or self.paused_duration is None:
-                        self.paused_duration = 0
-                    self.paused_duration += pause_duration
-                    print(f" Session timer resumed (was paused for {int(pause_duration)}s)")
-                    self.paused_at = None  # Clear pause timestamp
-                else:
-                    print(" Session timer resumed")
-            # Ensure timer is stopped before starting to avoid multiple timers
-            if self.elapsed_timer.isActive():
-                self.elapsed_timer.stop()
-            self.elapsed_timer.start(1000)  # Update every 1 second
-
-            # Disable Start button to prevent multiple clicks and visual indication
+            # ─────────────────────────────────────────────────────────────────
+            # INSTANT FEEDBACK: disable button & show “Connecting…” right now,
+            # before any blocking I/O. The actual port scan + VERSION + START
+            # happen in DeviceStartWorker (background QThread).
+            # ─────────────────────────────────────────────────────────────────
             self.start_btn.setEnabled(False)
+            self.start_btn.setText("Connecting…")
             self.start_btn.setStyleSheet("""
                 QPushButton {
-                    background: #e0e0e0;
-                    color: #a0a0a0;
-                    border: 2px solid #cccccc;
+                    background: #ffe0b2;
+                    color: #e65100;
+                    border: 2px solid #ff6600;
                     border-radius: 6px;
                     padding: 4px 8px;
                     font-size: 10px;
@@ -5647,10 +5546,51 @@ class ECGTestPage(QWidget):
                 }
             """)
 
-            # Enable Stop and Generate Report buttons
-            green_style = """
+            from ecg.serial.serial_reader import DeviceStartWorker
+            self._start_worker = DeviceStartWorker(
+                port=port,
+                baud_int=baud_int,
+                reader=self.serial_reader,
+                parent=self,
+            )
+            self._start_worker.version_ready.connect(self._on_device_version)
+            self._start_worker.connected.connect(
+                lambda ok, p, err: self._on_device_connected(ok, p, err, baud_int)
+            )
+            self._start_worker.start()
+
+        except Exception as e:
+            error_msg = f"Failed to start connection worker: {str(e)}"
+            print(error_msg)
+            # Restore button on unexpected pre-worker error
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText("Start")
+            self.show_connection_warning(error_msg)
+
+    def _on_device_version(self, version: str):
+        """Slot: device version received from background worker."""
+        if version:
+            print(f" 🧬 ECG Device Version: {version}")
+            # Update version label if it exists on the UI
+            if hasattr(self, 'version_label'):
+                try:
+                    self.version_label.setText(version)
+                except Exception:
+                    pass
+
+    def _on_device_connected(self, success: bool, port_to_use: str, error_msg: str, baud_int: int):
+        """
+        Slot: called (on main thread via signal) once the background worker
+        finishes. Continues the original post-connect logic from start_acquisition.
+        """
+        if not success:
+            print(f" [start] Connection failed: {error_msg}")
+            # Re-enable Start button so the user can retry
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText("Start")
+            self.start_btn.setStyleSheet("""
                 QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                         stop:0 #4CAF50, stop:1 #45a049);
                     color: white;
                     border: 2px solid #4CAF50;
@@ -5660,43 +5600,139 @@ class ECGTestPage(QWidget):
                     font-weight: bold;
                     text-align: center;
                 }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                        stop:0 #45a049, stop:1 #4CAF50);
-                    border: 2px solid #45a049;
-                    color: white;
-                }
-                QPushButton:pressed {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                        stop:0 #3d8b40, stop:1 #357a38);
-                    border: 2px solid #3d8b40;
-                    color: white;
-                }
-            """
-            self.stop_btn.setEnabled(True)
-            self.stop_btn.setStyleSheet(green_style)
+            """)
+            if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
+                self.dashboard_instance.update_test_state("12_lead_test", False)
+            self.show_connection_warning(f"Failed to connect to any serial port: {error_msg}")
+            return
 
-            def enable_generate_report_button():
-                self.generate_report_btn.setEnabled(True)
-                self.generate_report_btn.setStyleSheet(green_style)
-                self.generate_report_btn.setText("Generate Report")
-                print(" Generate Report button enabled after 15 seconds from Start")
+        # ── Connection successful: pull the now-started reader from the manager ──
+        from ecg.serial.serial_reader import GlobalHardwareManager
+        self.serial_reader = GlobalHardwareManager().get_reader(port_to_use, baud_int)
+        if self.serial_reader and hasattr(self, 'user_details'):
+            self.serial_reader.user_details = self.user_details
 
-            countdown_start = 12
-            self.generate_report_btn.setText(f"Generate Report ({countdown_start})")
-            for remaining in range(countdown_start - 1, 0, -1):
-                delay_ms = (countdown_start - remaining) * 1000
-                QTimer.singleShot(
-                    delay_ms,
-                    lambda r=remaining: self.generate_report_btn.setText(f"Generate Report ({r})")
-                )
+        # Persist discovered port so next Start skips the scan
+        if hasattr(self, 'settings_manager') and port_to_use:
+            self.settings_manager.set_serial_port(port_to_use)
 
-            QTimer.singleShot(12000, enable_generate_report_button)
-            
-        except Exception as e:
-            error_msg = f"Failed to connect to any serial port: {str(e)}"
-            print(error_msg)
-            self.show_connection_warning(error_msg)
+        print(f" Serial connection established successfully on {port_to_use}!")
+
+        # ── Start timers (was right after serial_reader.start() in original code) ──
+        timer_interval = 20  # 50 FPS
+        self.timer.start(timer_interval)
+        QTimer.singleShot(10, self.update_plots)   # instant first frame
+        if hasattr(self, '_12to1_timer'):
+            self._12to1_timer.start(100)
+
+        # Reset metric update timestamps for immediate metric updates
+        if hasattr(self, '_last_metric_update_ts'):
+            self._last_metric_update_ts = 0.0
+        if hasattr(self, '_metrics_calculated_once'):
+            delattr(self, '_metrics_calculated_once')
+        if hasattr(self, '_metrics_update_count'):
+            self._metrics_update_count = 0
+
+        # Sync dashboard
+        if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
+            if hasattr(self.dashboard_instance, '_last_metrics_update_ts'):
+                self.dashboard_instance._last_metrics_update_ts = 0.0
+            if hasattr(self.dashboard_instance, '_inactive_update_count'):
+                self.dashboard_instance._inactive_update_count = 0
+            try:
+                self.dashboard_instance.update_dashboard_metrics_from_ecg()
+                print("✅ Immediate dashboard update triggered on acquisition start")
+            except Exception as e:
+                print(f"⚠️ Dashboard immediate update failed: {e}")
+
+        self.update_recording_button_state()
+        print(f"[DEBUG] ECGTestPage - Timer active: {self.timer.isActive()}")
+        print(f"[DEBUG] ECGTestPage - Number of leads: {len(self.leads)}")
+        print(f"[DEBUG] ECGTestPage - Number of plot widgets: {len(self.plot_widgets)}")
+        print(f"[DEBUG] ECGTestPage - Number of data lines: {len(self.data_lines)}")
+
+        # Start / resume elapsed time
+        current_time = time.time()
+        if not hasattr(self, 'start_time') or self.start_time is None:
+            self.start_time = current_time
+            if hasattr(self, 'paused_duration'):
+                self.paused_duration = 0
+            self.paused_at = None
+            print(" Session timer started (first time)")
+        else:
+            if hasattr(self, 'paused_at') and self.paused_at is not None:
+                pause_duration = current_time - self.paused_at
+                if not hasattr(self, 'paused_duration') or self.paused_duration is None:
+                    self.paused_duration = 0
+                self.paused_duration += pause_duration
+                print(f" Session timer resumed (was paused for {int(pause_duration)}s)")
+                self.paused_at = None
+            else:
+                print(" Session timer resumed")
+        if self.elapsed_timer.isActive():
+            self.elapsed_timer.stop()
+        self.elapsed_timer.start(1000)
+
+        # Disable Start, enable Stop with grey / green styles
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("Start")
+        self.start_btn.setStyleSheet("""
+            QPushButton {
+                background: #e0e0e0;
+                color: #a0a0a0;
+                border: 2px solid #cccccc;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 10px;
+                font-weight: bold;
+                text-align: center;
+            }
+        """)
+
+        green_style = """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4CAF50, stop:1 #45a049);
+                color: white;
+                border: 2px solid #4CAF50;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 10px;
+                font-weight: bold;
+                text-align: center;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #45a049, stop:1 #4CAF50);
+                border: 2px solid #45a049;
+                color: white;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #3d8b40, stop:1 #357a38);
+                border: 2px solid #3d8b40;
+                color: white;
+            }
+        """
+        self.stop_btn.setEnabled(True)
+        self.stop_btn.setStyleSheet(green_style)
+
+        def enable_generate_report_button():
+            self.generate_report_btn.setEnabled(True)
+            self.generate_report_btn.setStyleSheet(green_style)
+            self.generate_report_btn.setText("Generate Report")
+            print(" Generate Report button enabled after 12 seconds from Start")
+
+        countdown_start = 12
+        self.generate_report_btn.setText(f"Generate Report ({countdown_start})")
+        for remaining in range(countdown_start - 1, 0, -1):
+            delay_ms = (countdown_start - remaining) * 1000
+            QTimer.singleShot(
+                delay_ms,
+                lambda r=remaining: self.generate_report_btn.setText(f"Generate Report ({r})")
+            )
+        QTimer.singleShot(12000, enable_generate_report_button)
+
 
     # ---------------------- Stop Button Functionality ----------------------
 

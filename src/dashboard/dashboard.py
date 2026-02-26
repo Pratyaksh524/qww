@@ -2565,25 +2565,60 @@ class Dashboard(QWidget):
                         print(f" Error converting Lead II data to array: {e}")
                         return self._fallback_wave_update(frame)
 
-                    # Get actual sampling rate from ECG test page
-                    actual_sampling_rate = 250  # Default to 250Hz to match 12-lead
+                    # Get actual sampling rate from ECG test page.
+                    # Hardware default is 500 Hz; fall back only when no valid rate is reported.
+                    actual_sampling_rate = 500  # Hardware default: 500 Hz
                     try:
-                        if (hasattr(self.ecg_test_page, 'sampler') and 
-                            hasattr(self.ecg_test_page.sampler, 'sampling_rate') and 
-                            self.ecg_test_page.sampler.sampling_rate):
-                            actual_sampling_rate = float(self.ecg_test_page.sampler.sampling_rate)
-                            if actual_sampling_rate <= 0 or actual_sampling_rate > 1000:
-                                actual_sampling_rate = 250
+                        if (hasattr(self.ecg_test_page, 'sampler') and
+                                hasattr(self.ecg_test_page.sampler, 'sampling_rate') and
+                                self.ecg_test_page.sampler.sampling_rate):
+                            reported_rate = float(self.ecg_test_page.sampler.sampling_rate)
+                            # Accept only physiologically sane rates (50–1000 Hz)
+                            if 50.0 <= reported_rate <= 1000.0:
+                                actual_sampling_rate = reported_rate
+                            else:
+                                print(f" Reported sampling rate {reported_rate} Hz out of range; using 500 Hz default")
                     except Exception as e:
                         print(f" Error getting sampling rate: {e}")
-                        actual_sampling_rate = 250
-                    
-                    # Use LIVE Lead II samples directly — no extra filtering
+
+                    # Apply filters matching the 12-lead display (AC notch → EMG → DFT → Gaussian)
                     try:
                         original_data = np.asarray(lead_ii_data, dtype=float)
+
+                        from ecg.ecg_filters import apply_ecg_filters
+                        from scipy.ndimage import gaussian_filter1d as _gf1d
+
+                        ac_setting  = str(self.settings_manager.get_setting("filter_ac",  "50")).strip()
+                        emg_setting = str(self.settings_manager.get_setting("filter_emg", "150")).strip()
+                        dft_setting = str(self.settings_manager.get_setting("filter_dft", "0.5")).strip()
+
+                        # Nyquist guard: AC notch at F Hz requires sampling rate > 2*F Hz.
+                        # Disable gracefully rather than letting the filter raise an error.
+                        if ac_setting in ("50", "60"):
+                            required_fs = float(ac_setting) * 2.0 + 1.0  # e.g. 101 Hz for 50 Hz notch
+                            if actual_sampling_rate <= required_fs:
+                                print(f" AC filter disabled (rate {actual_sampling_rate} Hz too low for {ac_setting} Hz notch)")
+                                ac_setting = "off"
+
+                        original_data = apply_ecg_filters(
+                            signal=original_data,
+                            sampling_rate=actual_sampling_rate,
+                            ac_filter=ac_setting  if ac_setting  not in ("off", "") else None,
+                            emg_filter=emg_setting if emg_setting not in ("off", "") else None,
+                            dft_filter=dft_setting if dft_setting not in ("off", "") else None,
+                        )
+
+                        # Light Gaussian smoothing (sigma=0.8 — same as 12-lead page SMOOTH_SIGMA)
+                        if len(original_data) > 5:
+                            original_data = _gf1d(original_data, sigma=0.8)
+
                     except Exception as e:
-                        print(f" Error converting Lead II data to array: {e}")
-                        return self._fallback_wave_update(frame)
+                        print(f" Dashboard filter error, using raw data: {e}")
+                        try:
+                            original_data = np.asarray(lead_ii_data, dtype=float)
+                        except Exception as e2:
+                            print(f" Error converting Lead II data to array: {e2}")
+                            return self._fallback_wave_update(frame)
                     
                     # Check for invalid values
                     if np.any(np.isnan(original_data)) or np.any(np.isinf(original_data)):
@@ -2608,45 +2643,52 @@ class Dashboard(QWidget):
                     seconds_to_show = baseline_seconds * (25.0 / max(1e-6, wave_speed))
                     window_samples = int(max(50, min(len(original_data), seconds_to_show * actual_sampling_rate)))
 
-                    # Slice last window and resample horizontally to fixed display length
+                    # ── Direct mirror of 12-lead Lead II display ────────────────────────
+                    # data[1] is already a rolling fixed-size buffer filled by the serial
+                    # reader (same as the 12-lead page uses).  We just take the last
+                    # window_samples from it, apply the same filters, and plot directly.
+                    # This is identical to how Lead II looks on the 12-lead page —
+                    # no manual ring-buffer needed, no wrapping jump.
+                    # ────────────────────────────────────────────────────────────────────
                     try:
+                        # Take the visible window slice (already filtered above)
                         src = original_data[-window_samples:]
-                        if len(src) > 0:
-                            # Hard-center baseline each frame to prevent upward drift
-                            current_dc = float(np.nanmean(src))
-                            src = src - current_dc + 2048.0
 
-                        display_len = len(self.ecg_x)
-                        if src.size <= 1:
-                            display_y = np.full(display_len, 2048.0)
-                            self._lead2_last_value = 2048.0
+                        # Strip NaNs from the head (happens while buffer fills up)
+                        valid_mask = ~np.isnan(src)
+                        if valid_mask.sum() < 5:
+                            # Not enough real data yet — show flat baseline
+                            display_y = np.full(len(self.ecg_x), 2048.0)
                         else:
-                            x_src = np.linspace(0.0, 1.0, src.size)
+                            # Baseline-centre once (same as 12-lead adaptive gain logic)
+                            dc = float(np.nanmedian(src))
+                            src_c = np.where(valid_mask, src - dc + 2048.0, 2048.0)
+
+                            # Resample to the fixed display width (ecg_x has 500 pts)
+                            display_len = len(self.ecg_x)
+                            x_src = np.linspace(0.0, 1.0, src_c.size)
                             x_dst = np.linspace(0.0, 1.0, display_len)
-                            display_y = np.interp(x_dst, x_src, src.astype(float))
-                            if not hasattr(self, '_lead2_last_value'):
-                                self._lead2_last_value = float(display_y[0])
-                            edge_len = max(5, int(0.06 * display_len))
-                            delta = float(self._lead2_last_value) - float(display_y[0])
-                            if np.isfinite(delta) and abs(delta) > 0.5:
-                                blend = np.linspace(delta, 0.0, edge_len, dtype=float)
-                                display_y[:edge_len] = display_y[:edge_len] + blend
-                            self._lead2_last_value = float(display_y[-1])
-                            display_y = np.clip(display_y, 0, 4096)
-                        
+                            display_y = np.interp(x_dst, x_src, src_c.astype(float))
+                            display_y = np.clip(display_y, 0, 4095)
+
+                        # ── Match x-axis to time in seconds (like 12-lead "1..10 s") ──
+                        # Update x-axis limits to show the correct time window
+                        seconds_shown = window_samples / actual_sampling_rate
+                        self.ecg_canvas.axes.set_xlim(0, seconds_shown)
+
                         # Validate display data
                         if np.any(np.isnan(display_y)) or np.any(np.isinf(display_y)):
                             print(" Invalid display data generated")
                             return self._fallback_wave_update(frame)
-                        
+
                         self.ecg_line.set_ydata(display_y)
-                        # Ensure y-axis is locked to 0-4096 range (same as 12-lead page)
                         self.ecg_canvas.axes.set_autoscale_on(False)
-                        self.ecg_canvas.axes.set_ylim(0, 4096)
-                        
+                        self.ecg_canvas.axes.set_ylim(0, 4095)
+
                     except Exception as e:
                         print(f" Error processing display data: {e}")
                         return self._fallback_wave_update(frame)
+
                     
                     # Calculate and update live ECG metrics using ORIGINAL data with SAME sampling rate
                     try:

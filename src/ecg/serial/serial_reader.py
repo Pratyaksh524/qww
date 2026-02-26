@@ -1,7 +1,10 @@
 """Serial communication classes for ECG hardware"""
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QThread, pyqtSignal
 
 # Configuration: Skip VERSION command if device doesn't support it or times out
 SKIP_VERSION_CHECK = False  # Enable VERSION command to populate Version panel
@@ -116,81 +119,87 @@ class SerialStreamReader:
             print("⚠️ No COM ports found")
             print("="*70 + "\n")
             return None
-        
-        # Try each port
-        detected_port = None
-        detected_serial = None
-        temp_ports = []  # Track opened ports to close them
-        
-        for port_name in port_list:
-            print(f"\n🔌 Testing port: {port_name}")
+
+        # ── macOS optimisation: only probe USB-serial paths ──────────────────
+        # On macOS, comports() returns Bluetooth modems, internal modems, and
+        # the USB CDC device. Opening Bluetooth modem paths takes 500–800 ms
+        # each on macOS because the system driver negotiates a session.
+        # Filtering to /dev/cu.usb* avoids all non-ECG paths immediately.
+        if sys.platform == "darwin":
+            usb_ports = [
+                p for p in port_list
+                if any(k in p.lower() for k in ("usbserial", "usbmodem", "tty.usb", "cu.usb"))
+            ]
+            if usb_ports:
+                print(f"🍎 macOS: filtered to {len(usb_ports)} USB port(s): {usb_ports}")
+                port_list = usb_ports
+            else:
+                print("🍎 macOS: no USB ports found – scanning all ports")
+        # ─────────────────────────────────────────────────────────────────────
+
+        def _probe_port(port_name: str):
+            """Try opening port_name and sending START. Returns (port, ser) or None."""
             temp_ser = None
             try:
-                # Open port with short timeout for quick scanning
+                print(f"   🔌 Testing port: {port_name}")
                 temp_ser = serial.Serial(
                     port=port_name,
                     baudrate=baudrate,
                     timeout=timeout,
-                    write_timeout=timeout
+                    write_timeout=timeout,
                 )
-                temp_ports.append(temp_ser)
-                
-                # Clear any existing data
                 temp_ser.reset_input_buffer()
                 temp_ser.reset_output_buffer()
-                
-                # Create temporary command handler
                 temp_handler = HardwareCommandHandler(temp_ser)
-                
-                # Send START command with reduced timeout for faster scanning (100ms)
-                # Use quiet mode during scanning to reduce verbosity
-                print(f"   📤 Sending START command to {port_name}...")
-                success, response = temp_handler.send_start_command(timeout=timeout, quiet=True)
-                
+                success, _ = temp_handler.send_start_command(timeout=timeout, quiet=True)
                 if success:
                     print(f"   ✅ Port {port_name} responded with ACK!")
-                    detected_port = port_name
-                    detected_serial = temp_ser
-                    # Remove from temp_ports so we don't close it
-                    temp_ports.remove(temp_ser)
-                    break
+                    return (port_name, temp_ser)
                 else:
                     print(f"   ❌ Port {port_name} did not respond correctly")
                     temp_ser.close()
-                    temp_ports.remove(temp_ser)
-                    
-            except serial.SerialException as e:
-                print(f"   ⚠️ Port {port_name} error: {e}")
-                if temp_ser and temp_ser in temp_ports:
+                    return None
+            except Exception as exc:
+                print(f"   ⚠️ Port {port_name} error: {exc}")
+                if temp_ser:
                     try:
                         temp_ser.close()
-                        temp_ports.remove(temp_ser)
-                    except:
+                    except Exception:
                         pass
-            except Exception as e:
-                print(f"   ⚠️ Port {port_name} unexpected error: {e}")
-                if temp_ser and temp_ser in temp_ports:
+                return None
+
+        # ── Parallel probing ─────────────────────────────────────────────────
+        # Try all candidate ports simultaneously. Whichever replies first wins;
+        # the rest are cancelled. On Mac with a single USB device this cuts
+        # scan time from (N × timeout) down to ~timeout for one port.
+        detected_port = None
+        detected_serial = None
+        winner_futures = []
+        with ThreadPoolExecutor(max_workers=max(1, len(port_list))) as pool:
+            futures = {pool.submit(_probe_port, p): p for p in port_list}
+            for fut in as_completed(futures):
+                result = fut.result()
+                if result and detected_port is None:
+                    detected_port, detected_serial = result
+                    # Cancel remaining (best-effort; already-running threads finish naturally)
+                    for f in futures:
+                        if f is not fut:
+                            f.cancel()
+                elif result and result[1] is not None:
+                    # Another thread also succeeded – close the extra port
                     try:
-                        temp_ser.close()
-                        temp_ports.remove(temp_ser)
-                    except:
+                        result[1].close()
+                    except Exception:
                         pass
-        
-        # Close all temporary ports (keep the detected one open)
-        for temp_ser in temp_ports:
-            try:
-                if temp_ser.is_open:
-                    temp_ser.close()
-            except:
-                pass
-        
+        # ─────────────────────────────────────────────────────────────────────
+
         if detected_port and detected_serial:
             print(f"\n✅ PORT DETECTED: {detected_port}")
         else:
             print(f"\n❌ No port responded to START command")
-        
+
         print("="*70 + "\n")
-        
+
         if detected_port and detected_serial:
             return (detected_port, detected_serial)
         return None
@@ -775,3 +784,105 @@ This error has been logged and an email notification will be sent to the support
             
         except Exception as e:
             print(f" Error sending serial error email: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Background worker: runs the entire connect + start sequence off the Qt
+# main thread so the UI never freezes while the device handshakes.
+# ─────────────────────────────────────────────────────────────────────────────
+class DeviceStartWorker(QThread):
+    """
+    Runs scan_and_detect_port → serial_reader.start() in a background thread.
+
+    Signals
+    -------
+    connected(bool, str, str)
+        Emitted when the sequence finishes.
+        Args: (success, port_used, error_message)
+    version_ready(str)
+        Emitted (possibly empty string) once the device version is known.
+    """
+    connected = pyqtSignal(bool, str, str)   # success, port, error_msg
+    version_ready = pyqtSignal(str)           # version string (may be empty)
+
+    def __init__(self, port: str, baud_int: int, reader, parent=None):
+        """
+        Parameters
+        ----------
+        port      : configured port string ("Select Port" / None means auto-scan)
+        baud_int  : baud rate as int
+        reader    : an already-instantiated SerialStreamReader (or None if
+                    GlobalHardwareManager hasn't created one yet)
+        """
+        super().__init__(parent)
+        self._port = port
+        self._baud_int = baud_int
+        # Keep a reference so the caller can read reader.device_version etc.
+        self._reader = reader
+        self._port_to_use = None   # filled in by run()
+
+    @property
+    def port_to_use(self):
+        """The port that was actually used (available after connected signal)."""
+        return self._port_to_use
+
+    def run(self):
+        """Background work: port scan (if needed) → open → VERSION → START."""
+        try:
+            port = self._port
+            baud_int = self._baud_int
+
+            # ── Determine whether we need to auto-scan ────────────────────
+            scan_needed = port in ("Select Port", None, "")
+            if not scan_needed and SERIAL_AVAILABLE:
+                try:
+                    available = [p.device for p in serial.tools.list_ports.comports()]
+                    if port not in available:
+                        print(f" [Worker] Configured port {port} not found – forcing scan")
+                        scan_needed = True
+                except Exception:
+                    pass
+
+            port_to_use = port
+            if scan_needed:
+                print(" [Worker] Scanning ports for ECG device…")
+                scan_result = SerialStreamReader.scan_and_detect_port(
+                    baudrate=baud_int, timeout=0.2
+                )
+                if scan_result:
+                    port_to_use, detected_ser = scan_result
+                    print(f" [Worker] Auto-detected port: {port_to_use}")
+                    # Close the scan probe connection so the reader can open fresh
+                    try:
+                        if detected_ser and detected_ser.is_open:
+                            detected_ser.close()
+                    except Exception:
+                        pass
+                else:
+                    self.connected.emit(False, "", "No ECG device found on any port")
+                    return
+
+            self._port_to_use = port_to_use
+
+            # ── Get / create the shared reader ────────────────────────────
+            from ecg.serial.serial_reader import GlobalHardwareManager
+            reader = GlobalHardwareManager().get_reader(port_to_use, baud_int)
+            if reader is None:
+                self.connected.emit(False, port_to_use, "Failed to create serial reader")
+                return
+            self._reader = reader
+
+            # ── Start (opens port, VERSION handshake, START command) ──────
+            reader.start()
+
+            # Emit version (may be None)
+            version = reader.device_version or ""
+            self.version_ready.emit(version)
+
+            self.connected.emit(True, port_to_use, "")
+
+        except Exception as exc:
+            import traceback
+            err = f"{exc}\n{traceback.format_exc()}"
+            print(f" [Worker] Error during start: {err}")
+            self.connected.emit(False, self._port_to_use or "", str(exc))
