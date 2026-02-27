@@ -59,8 +59,10 @@ class SettingsManager:
         print(f"Setting updated: {key} = {value}")  # Terminal verification
 
     def reset_to_defaults(self):
-        """Restore every persisted setting to its original factory default."""
+        """Restore every persisted setting to its original factory default, preserving hardware version."""
+        current_hw_version = self.settings.get("hardware_version", "")
         self.settings = self.default_settings.copy()
+        self.settings["hardware_version"] = current_hw_version
         self.save_settings()
         return self.settings.copy()
     

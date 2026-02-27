@@ -381,6 +381,12 @@ class Dashboard(QWidget):
         # Admin button (disabled per request; keep logic available)
         self.admin_btn = QPushButton("Admin")
         self.admin_btn.setVisible(False)
+
+        self.version_btn = QPushButton("Version Information")
+        self.version_btn.setStyleSheet("background: #3498db; color: white; border-radius: 10px; padding: 4px 18px; margin-right: 10px;")
+        self.version_btn.clicked.connect(self.show_version_popup)
+        self.version_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        header.addWidget(self.version_btn)
         
         self.sign_btn = QPushButton("Sign Out")
         self.sign_btn.setStyleSheet("background: #e74c3c; color: white; border-radius: 10px; padding: 4px 18px;")
@@ -403,6 +409,7 @@ class Dashboard(QWidget):
 
         self._device_scan_in_progress = False
         self._last_device_scan_time = 0
+        self._initial_scan_completed = False
 
         # Initialize UI as disconnected
         self.update_device_ui(False)
@@ -4004,6 +4011,36 @@ class Dashboard(QWidget):
         
         except Exception as e:
             print(f" Error updating conclusion: {e}")
+
+    def show_version_popup(self):
+        """Show version information in a popup dialog"""
+        if hasattr(self, 'ecg_test_page') and hasattr(self.ecg_test_page, 'ecg_menu'):
+            content = self.ecg_test_page.ecg_menu.create_version_info_content()
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Version Information")
+            dialog.setMinimumWidth(500)
+            dialog.setMinimumHeight(600)
+            
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(content)
+            
+            close_btn = QPushButton("Close")
+            close_btn.setStyleSheet("background: #ff6600; color: white; border-radius: 8px; padding: 10px; font-weight: bold;")
+            close_btn.clicked.connect(dialog.accept)
+            layout.addWidget(close_btn)
+            
+            dialog.exec_()
+        else:
+            hw_v = "Not Detected"
+            if hasattr(self, 'settings_manager'):
+                # Reload settings to ensure we have the latest from disk
+                self.settings_manager.settings = self.settings_manager.load_settings()
+                hw_v = self.settings_manager.get_setting("hardware_version", "Not Detected")
+                if not hw_v:
+                    hw_v = "Not Detected"
+            QMessageBox.information(self, "Version Information", f"Software Version: V 1.1.1\nHardware Version: {hw_v}")
+
     def handle_sign_out(self):
         # User label removed per request
         # self.user_label.setText("Not signed in")
@@ -4163,6 +4200,14 @@ class Dashboard(QWidget):
                     self.device_port = None
                     self.update_device_ui(False)
 
+                    # Inform user if on dashboard and no tests active
+                    is_on_dashboard = self.page_stack.currentWidget() == self.dashboard_page
+                    hrv_active = hasattr(self, 'hrv_window') and self.hrv_window and self.hrv_window.isVisible()
+                    hyper_active = hasattr(self, 'hyperkalemia_window') and self.hyperkalemia_window and self.hyperkalemia_window.isVisible()
+                    
+                    if is_on_dashboard and not hrv_active and not hyper_active:
+                        QMessageBox.warning(self, "Connection Status", "Connection lost. Please ensure the device is properly connected")
+
                     # If HRV or Hyperkalemia test window is open, show "Test Failed" and close it
                     if hasattr(self, 'hrv_window') and self.hrv_window and self.hrv_window.isVisible():
                         if hasattr(self.hrv_window, 'stop_capture'):
@@ -4246,6 +4291,7 @@ class Dashboard(QWidget):
                 ports = [p for p in ports if ("usbserial" in p.device) or ("usbmodem" in p.device)]
             if not ports:
                 self.update_device_ui(False)
+                self._initial_scan_completed = True
                 return
 
             # Prioritize the last saved port to speed up connection
@@ -4264,9 +4310,17 @@ class Dashboard(QWidget):
                     ser.close()
                     
                     if success and version:
+                        # Inform user if not the initial scan
+                        if getattr(self, '_initial_scan_completed', False):
+                            QMessageBox.information(self, "Connection Status", "Device connected")
+
+                        # Update hardware version if it's different from current
+                        if self.device_version != version:
+                            print(f"🔄 Hardware version changed from {self.device_version} to {version}")
+                            self.device_version = version
+
                         self.device_port = port.device
                         self.device_connected = True
-                        self.device_version = version
                         self.update_device_ui(True)
 
                         # Save to settings so test pages can use it
@@ -4277,14 +4331,17 @@ class Dashboard(QWidget):
                             self.settings_manager.save_settings()
                             elapsed = time.time() - scan_start
                             print(f"✅ Device found on {port.device} in {elapsed:.2f}s, saved to settings with version {version}.")
+                            self._initial_scan_completed = True
                         return
                 except Exception:
                     continue
 
             # If loop finishes without success
             self.update_device_ui(False)
+            self._initial_scan_completed = True
             
         except Exception:
+            self._initial_scan_completed = True
             pass
 
     def update_device_ui(self, connected):
@@ -4308,6 +4365,12 @@ class Dashboard(QWidget):
         else:
             self.device_status_label.setText("Device Disconnected")
             self.device_status_label.setStyleSheet("color: red; margin-right: 10px; font-weight: bold;")
+
+            # Reset hardware version in settings when disconnected
+            if hasattr(self, 'settings_manager'):
+                self.settings_manager.set_setting("hardware_version", "")
+                # set_setting already calls save_settings()
+            self.device_version = None
             
             # Disable test buttons
             
@@ -4704,6 +4767,13 @@ class Dashboard(QWidget):
     def closeEvent(self, event):
         """Handle dashboard closure to ensure hardware is disconnected"""
         print("Dashboard closing...")
+
+        # Clear hardware version on application close
+        if hasattr(self, 'settings_manager'):
+            self.settings_manager.set_setting("hardware_version", "")
+            self.settings_manager.save_settings()
+            print("✅ Hardware version cleared on close")
+
         try:
             if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
                 if hasattr(self.ecg_test_page, 'close_serial_connection'):

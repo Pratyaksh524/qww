@@ -6,8 +6,9 @@ from PyQt5.QtWidgets import (
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
-from PyQt5.QtCore import QTimer, Qt, QPropertyAnimation, QEasingCurve, QTimer, pyqtProperty, QRect
-from PyQt5.QtGui import QIntValidator
+from PyQt5.QtCore import QTimer, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QRect, QPoint, QEvent
+from PyQt5.QtGui import QIntValidator, QColor
+from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 from utils.settings_manager import SettingsManager
 from utils.localization import translate_text
 import os
@@ -428,7 +429,6 @@ class ECGMenu(QGroupBox):
             ("Set Filter", self.on_set_filter),
             ("System Setup", self.on_system_setup),
             ("Load Default", self.on_load_default),
-            ("Version", self.on_version_info),
             ("Exit", self.on_exit)
         ]
         for text, handler in self.menu_button_defs:
@@ -478,7 +478,6 @@ class ECGMenu(QGroupBox):
                 "Set Filter": self.show_set_filter,
                 "System Setup": self.show_system_setup,
                 "Load Default": self.show_load_default,
-                "Version": self.show_version_info,
                 "Exit": self.show_exit,
             }
             if panel in reopen_map:
@@ -564,8 +563,6 @@ class ECGMenu(QGroupBox):
         self.show_system_setup()
     def on_load_default(self):
         self.show_load_default()
-    def on_version_info(self):
-        self.show_version_info()
     def on_exit(self):
         self.show_exit()
 
@@ -819,75 +816,65 @@ class ECGMenu(QGroupBox):
                 margin: {max(4, form_margin-2)}px;
             }}
         """)
-        form_layout = QGridLayout(form_frame)
-        form_layout.setSpacing(max(6, min(12, spacing_size-5)))
+        form_layout = QVBoxLayout(form_frame)
+        form_layout.setSpacing(max(10, min(15, spacing_size-5)))
         form_layout.setContentsMargins(max(8, min(15, int(margin_size * 0.3))), 
                                       max(8, min(15, int(margin_size * 0.3))), 
                                       max(8, min(15, int(margin_size * 0.3))), 
                                       max(8, min(15, int(margin_size * 0.3))))
-        # Make right column grow with window size
-        try:
-            form_layout.setColumnStretch(0, 1)
-            form_layout.setColumnStretch(1, 3)
-        except Exception:
-            pass
         
         labels = ["Org.", "Doctor", "Phone No.", "Patient Name"]
         entries = {}
 
         # Responsive form fields
-        for i, label in enumerate(labels):
-            lbl = QLabel(label)
-            label_font_size = max(11, min(16, int(margin_size * 0.55)))
-            # Responsive label sizing for small screens
-            label_min_width = max(60, min(120, int(margin_size * 2.5)))
-            label_min_height = max(22, min(32, int(margin_size * 0.8)))
-            lbl.setStyleSheet(f"""
-                QLabel {{
-                    font: bold {label_font_size}pt Arial;
-                    color: #000000;
-                    background: #ffffff;
-                    padding: {max(4, min(8, int(margin_size * 0.2)))}px;
-                    min-width: {label_min_width}px;
-                    max-width: {label_min_width + 20}px;
-                    min-height: {label_min_height}px;
-                    border: 1px solid #e0e0e0;
-                    border-radius: 5px;
-                    margin: 2px;
-                }}
-            """)
-            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            form_layout.addWidget(lbl, i, 0)
+# Style for labels and inputs
+        label_style = f"""
+            QLabel {{
+                font: bold {max(11, int(margin_size * 0.55))}pt Arial;
+                color: #2c3e50;
+                background: #f8f9fa;
+                padding: {max(8, int(margin_size * 0.4))}px;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                min-width: 140px;
+                max-width: 140px;
+            }}
+        """
+        input_style = f"""
+            QLineEdit {{
+                font: {max(10, int(margin_size * 0.5))}pt Arial;
+                color: #ff6600;
+                background: white;
+                padding: {max(8, int(margin_size * 0.4))}px;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                min-height: {max(25, min(35, int(margin_size * 0.9)))}px;
+            }}
+            QLineEdit:focus {{
+                border: 2px solid #ff6600;
+                background: #fff8f0;
+            }}
+            QLineEdit:hover {{
+                border: 1px solid #ffb347;
+                background: #fafafa;
+            }}
+        """
 
-            entry = QLineEdit()
-            entry_font_size = max(9, min(12, int(margin_size * 0.35)))
-            entry_padding = max(3, min(7, int(margin_size * 0.18)))
-            entry.setStyleSheet(f"""
-                QLineEdit {{
-                    font: {entry_font_size}pt Arial;
-                    padding: {entry_padding}px;
-                    border: 2px solid #e0e0e0;
-                    border-radius: 8px;
-                    background: white;
-                    color: #2c3e50;
-                    min-height: {max(25, min(35, int(margin_size * 0.9)))}px;
-                }}
-                QLineEdit:focus {{
-                    border: 2px solid #343434;
-                    background: #fff8f0;
-                }}
-                QLineEdit:hover {{
-                    border: 2px solid #ffb347;
-                    background: #fafafa;
-                }}
-            """)
+        # Responsive form fields
+        for label in labels:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+
+            lbl = QLabel(self.tr(label))
+            lbl.setStyleSheet(label_style)
             
-            # Responsive entry field sizes (expand horizontally, ensure minimum for touch)
-            entry_height = max(22, min(32, int(margin_size * 0.8)))
-            entry.setMinimumHeight(entry_height)
-            entry.setMinimumWidth(max(80, int(margin_size * 2.0)))  # Ensure touch-friendly width
+            entry = QLineEdit()
+            entry.setPlaceholderText(self.tr(f"Enter {label}"))
+            entry.setStyleSheet(input_style)
             entry.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            form_layout.addWidget(entry, i, 1)
+            row.addWidget(lbl)
+            row.addWidget(entry)
+            form_layout.addLayout(row)
             entries[label] = entry
         
         entries["Doctor"].setMaxLength(20)
@@ -895,110 +882,57 @@ class ECGMenu(QGroupBox):
         entries["Patient Name"].setMaxLength(20) 
 
         # Age field with responsive sizing
-        lbl_age = QLabel("Age")
-        label_min_width = max(60, min(120, int(margin_size * 2.5)))
-        label_min_height = max(22, min(32, int(margin_size * 0.8)))
-        lbl_age.setStyleSheet(f"""
-            QLabel {{
-                font: bold {label_font_size}pt Arial;
-                color: #000000;
-                background: #ffffff;
-                padding: {max(4, min(8, int(margin_size * 0.2)))}px;
-                min-width: {label_min_width}px;
-                max-width: {label_min_width + 20}px;
-                min-height: {label_min_height}px;
-                border: 1px solid #e0e0e0;
-                border-radius: 5px;
-                margin: 2px;
-            }}
-        """)
-        lbl_age.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        # Shift age to its own row to avoid overwriting Patient Name
-        form_layout.addWidget(lbl_age, 4, 0)
+
+        age_row = QHBoxLayout()
+        age_row.setSpacing(10)
+        
+        age_lbl = QLabel(self.tr("Age"))
+        age_lbl.setStyleSheet(label_style)
 
         age_entry = QLineEdit()
+        age_entry.setPlaceholderText(self.tr("Enter Age"))
         age_entry.setValidator(QIntValidator(0, 120, age_entry))
-        entry_padding = max(3, min(7, int(margin_size * 0.18)))
-        age_entry.setStyleSheet(f"""
-            QLineEdit {{
-                font: {entry_font_size}pt Arial;
-                padding: {entry_padding}px;
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
-                background: white;
-                color: #2c3e50;
-                min-height: {max(25, min(35, int(margin_size * 0.9)))}px;
-            }}
-            QLineEdit:focus {{
-                border: 2px solid #343434;
-                background: #fff8f0;
-            }}
-            QLineEdit:hover {{
-                border: 2px solid #ffb347;
-                background: #fafafa;
-            }}
-        """)
-        
-        age_height = max(22, min(32, int(margin_size * 0.8)))
-        age_entry.setMinimumHeight(age_height)
-        age_entry.setMinimumWidth(max(80, int(margin_size * 2.0)))  # Ensure touch-friendly width
+        age_entry.setStyleSheet(input_style)
         age_entry.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        form_layout.addWidget(age_entry, 4, 1)
+        age_row.addWidget(age_lbl)
+        age_row.addWidget(age_entry)
+        form_layout.addLayout(age_row)
         entries["Age"] = age_entry
 
         # Gender field with responsive sizing
-        lbl_gender = QLabel("Gender")
-        label_min_width = max(60, min(120, int(margin_size * 2.5)))
-        label_min_height = max(22, min(32, int(margin_size * 0.8)))
-        lbl_gender.setStyleSheet(f"""
-            QLabel {{
-                font: bold {label_font_size}pt Arial;
-                color: #000000;
-                background: #ffffff;
-                padding: {max(4, min(8, int(margin_size * 0.2)))}px;
-                min-width: {label_min_width}px;
-                max-width: {label_min_width + 20}px;
-                min-height: {label_min_height}px;
-                border: 1px solid #e0e0e0;
-                border-radius: 5px;
-                margin: 2px;
-            }}
-        """)
-        lbl_gender.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        # Place gender on its own row below age
-        form_layout.addWidget(lbl_gender, 5, 0)
+
+        gender_row = QHBoxLayout()
+        gender_row.setSpacing(10)
+        
+        gender_lbl = QLabel(self.tr("Gender"))
+        gender_lbl.setStyleSheet(label_style)
 
         gender_menu = QComboBox()
-        gender_menu.addItems(["Select", "Male", "Female", "Other"])
-        entry_padding = max(3, min(7, int(margin_size * 0.18)))
+        gender_menu.addItems([self.tr("Select Gender"), self.tr("Male"), self.tr("Female"), self.tr("Other")])
         gender_menu.setStyleSheet(f"""
             QComboBox {{
-                font: {entry_font_size}pt Arial;
-                padding: {entry_padding}px;
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
+                font: {max(10, int(margin_size * 0.5))}pt Arial;
+                padding: {max(8, int(margin_size * 0.4))}px;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
                 background: white;
-                color: #2c3e50;
+                color: #ff6600;
                 min-height: {max(25, min(35, int(margin_size * 0.9)))}px;
             }}
             QComboBox:focus {{
                 border: 2px solid #343434;
-                background: #fff8f0;
-            }}
-            QComboBox:hover {{
-                border: 2px solid #ffb347;
-                background: #fafafa;
+                background: #ff6600;
             }}
             QComboBox::drop-down {{
                 border: none;
-                width: {max(18, min(25, int(margin_size * 0.5)))}px;
+                width: 30px;
             }}
             QComboBox::down-arrow {{
                 image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid #ff6600;
-                margin-right: 8px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #ff6600;
+                margin-right: 10px;
             }}
             QComboBox QAbstractItemView {{
                 background: white;
@@ -1007,33 +941,13 @@ class ECGMenu(QGroupBox):
                 selection-background-color: #ff6600;
                 selection-color: white;
                 outline: none;
-                font: {entry_font_size}pt Arial;
-                padding: {max(4, min(8, int(margin_size * 0.2)))}px;
-                margin-left: -15px;
-                margin-right: -15px;
-            }}
-            QComboBox QAbstractItemView::item {{
-                padding: {max(4, min(8, int(margin_size * 0.2)))}px {max(8, min(12, int(margin_size * 0.3)))}px;
-                border-radius: 5px;
-                margin: 2px;
-                min-height: {max(20, min(28, int(margin_size * 0.7)))}px;
-            }}
-            QComboBox QAbstractItemView::item:hover {{
-                background: #fff0e0;
-                color: #ff6600;
-            }}
-            QComboBox QAbstractItemView::item:selected {{
-                background: #ff6600;
-                color: white;
-                font-weight: bold;
             }}
         """)
         
-        gender_height = max(22, min(32, int(margin_size * 0.8)))
-        gender_menu.setMinimumHeight(gender_height)
-        gender_menu.setMinimumWidth(max(80, int(margin_size * 2.0)))  # Ensure touch-friendly width
         gender_menu.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        form_layout.addWidget(gender_menu, 5, 1)
+        gender_row.addWidget(gender_lbl)
+        gender_row.addWidget(gender_menu)
+        form_layout.addLayout(gender_row)
 
         # Prefill previously saved values if available (from centralized database)
         try:
@@ -1670,11 +1584,6 @@ class ECGMenu(QGroupBox):
         content_widget = self.create_load_default_content()
         self.show_sliding_panel(content_widget, "Load Default Settings", "Load Default")
 
-    def show_version_info(self):
-        self.ensure_sliding_panel_ready()
-        content_widget = self.create_version_info_content()
-        self.show_sliding_panel(content_widget, self.tr("Version Information"), "Version")
-
     # ----------------------------- System Setup -----------------------------
 
     def create_system_setup_content(self):
@@ -1733,17 +1642,22 @@ class ECGMenu(QGroupBox):
         layout.setContentsMargins(margin_size, margin_size, margin_size, margin_size)
         layout.setSpacing(spacing_size)
 
+        title_font_size = max(16, min(22, int(margin_size * 0.8)))
+
         # Top load_default header bar
         load_default_header = QLabel(self.tr("Load Default Settings") if hasattr(self, 'tr') else "Load Default Settings")
         load_default_header.setAlignment(Qt.AlignCenter)
-        load_default_header.setStyleSheet("""
-            QLabel {
-                background: #ff8400;
-                color: #ffffff;
-                font: bold 16pt 'Arial';
-                border-radius: 8px;
-                padding: 10px;
-            }
+        load_default_header.setStyleSheet(f"""
+            QLabel {{
+                font: bold {max(14, title_font_size-2)}pt 'Arial';
+                color: white;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #ff6600, stop:1 #ff8c42);
+                border: 2px solid #343434;
+                border-radius: 12px;
+                padding: {max(12, margin_size-12)}px;
+                margin: {max(4, margin_size-18)}px;
+            }}
         """)
         layout.addWidget(load_default_header)
 
@@ -1754,17 +1668,17 @@ class ECGMenu(QGroupBox):
                 background: #f5f5f5;
                 border: 2px solid #d0d0d0;
                 border-radius: 12px;
-                padding: 30px 20px;
+                padding: 15px 20px;
             }
         """)
         message_layout = QVBoxLayout(message_frame)
-        message_layout.setSpacing(12)
+        message_layout.setSpacing(8)
 
         msg_line1 = QLabel(self.tr("Adopt Factory Default Config?"))
         msg_line1.setAlignment(Qt.AlignCenter)
         msg_line1.setStyleSheet("""
             QLabel {
-                font: 14pt 'Arial';
+                font: 12pt 'Arial';
                 color: #222;
             }
         """)
@@ -1774,7 +1688,7 @@ class ECGMenu(QGroupBox):
         msg_line2.setAlignment(Qt.AlignCenter)
         msg_line2.setStyleSheet("""
             QLabel {
-                font: italic 12pt 'Arial';
+                font: italic 10pt 'Arial';
                 color: #444;
             }
         """)
@@ -1788,14 +1702,14 @@ class ECGMenu(QGroupBox):
         btn_row.addStretch(1)
 
         no_btn = QPushButton(self.tr("No"))
-        no_btn.setFixedSize(140, 48)
+        no_btn.setFixedSize(100, 36)
         no_btn.setStyleSheet("""
             QPushButton {
                 background: #e74c3c;
                 color: white;
                 border: 2px solid #c0392b;
                 border-radius: 6px;
-                font: bold 14pt 'Arial';
+                font: bold 11pt 'Arial';
             }
             QPushButton:hover {
                 background: #ff5c4b;
@@ -1805,14 +1719,14 @@ class ECGMenu(QGroupBox):
         btn_row.addWidget(no_btn)
 
         yes_btn = QPushButton(self.tr("Yes"))
-        yes_btn.setFixedSize(140, 48)
+        yes_btn.setFixedSize(100, 36)
         yes_btn.setStyleSheet("""
             QPushButton {
                 background: #2ecc71;
                 color: #fff;
                 border: 2px solid #27ae60;
                 border-radius: 6px;
-                font: bold 14pt 'Arial';
+                font: bold 11pt 'Arial';
             }
             QPushButton:hover {
                 background: #3ddc80;
@@ -1834,21 +1748,16 @@ class ECGMenu(QGroupBox):
 
         # Notify downstream listeners so active widgets update immediately
         if restored_settings:
+            plotting_keys = ["wave_speed", "wave_gain", "filter_ac", "filter_emg", "filter_dft"]
             for key, value in restored_settings.items():
+                if key in plotting_keys:
+                    # Just update the manager silently without broadcasting to UI
+                    self.settings_manager.set_setting(key, value)
+                    continue
                 try:
                     self.on_setting_changed(key, value)
                 except Exception as err:
                     print(f" Unable to broadcast default for {key}: {err}")
-
-        # Refresh ECG test page visual state if available
-        if hasattr(self, 'ecg_test_page') and self.ecg_test_page:
-            try:
-                if hasattr(self.ecg_test_page, 'apply_display_settings'):
-                    self.ecg_test_page.apply_display_settings()
-                if hasattr(self.ecg_test_page, 'update_plots'):
-                    self.ecg_test_page.update_plots()
-            except Exception as err:
-                print(f" Unable to refresh ECG test page after defaults: {err}")
 
         QMessageBox.information(
             self.parent(),
@@ -1857,7 +1766,7 @@ class ECGMenu(QGroupBox):
         )
         self.hide_sliding_panel()
 
-    # ----------------------------- Version Info -----------------------------
+    # ----------------------------- Version Info (Function call changed and added to dashboard.py) -----------------------------
 
     def create_version_info_content(self):
         # Create a simple version info display
@@ -1930,6 +1839,9 @@ class ECGMenu(QGroupBox):
 
         if not self.settings_manager:
             self.settings_manager = SettingsManager()
+        else:
+            # Reload settings to ensure we have the latest version from disk
+            self.settings_manager.settings = self.settings_manager.load_settings()
         hardware_version = ""
         if self.settings_manager:
             hardware_version = self.settings_manager.get_setting("hardware_version", "")
@@ -1997,28 +1909,6 @@ class ECGMenu(QGroupBox):
 
         scroll_area.setWidget(info_frame)
         layout.addWidget(scroll_area)
-
-        # Exit button
-        exit_btn = QPushButton(self.tr("Close"))
-        exit_btn.setStyleSheet(f"""
-            QPushButton {{
-                font: bold {max(11, int(margin_size * 0.55))}pt Arial;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #6c757d, stop:0.5 #495057, stop:1 #6c757d);
-                color: white;
-                border: 2px solid #6c757d;
-                border-radius: 8px;
-                padding: {max(10, int(margin_size * 0.5))}px;
-                min-height: {max(35, int(margin_size * 1.8))}px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #495057, stop:0.5 #6c757d, stop:1 #495057);
-                border: 2px solid #495057;
-            }}
-        """)
-        exit_btn.clicked.connect(self.hide_sliding_panel)
-        layout.addWidget(exit_btn, alignment=Qt.AlignCenter)
         
         return widget
 

@@ -678,6 +678,10 @@ class HRVTestWindow(QWidget):
                     else:
                         buffer_data = padded_data
 
+                    edge_trim = int(0.5 * fs)
+                    if len(buffer_data) > 2 * edge_trim:
+                        buffer_data = buffer_data[edge_trim:-edge_trim]
+
                 if len(buffer_data) > 0:
                     # Create time axis based on sampling rate
                     num_samples = len(buffer_data)

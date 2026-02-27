@@ -44,8 +44,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QGroupBox, QFileDialog,
     QStackedLayout, QGridLayout, QSizePolicy, QMessageBox, QFormLayout, QLineEdit, QFrame, QApplication, QDialog
 )
-from PyQt5.QtGui import QFont, QColor
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QDateTime 
+from PyQt5.QtGui import QFont, QColor, QPainter, QBrush
+from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QDateTime, QRect 
 
 # Matplotlib imports (still used for detailed/overlay views)
 from matplotlib.figure import Figure
@@ -617,6 +617,56 @@ def detect_arrhythmia(heart_rate, qrs_duration, rr_intervals, pr_interval=None, 
     except Exception as e:
         return "Detecting..."
 
+class SwitchButton(QPushButton):
+    """Custom toggle switch with a sliding white circle icon"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setMinimumHeight(40)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFont(QFont("Arial", 10, QFont.Bold))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 1. Draw Rounded Background (Pill Shape)
+        is_on = self.isChecked()
+        bg_color = QColor("#2ecc71") if is_on else QColor("#ff4d4d") # Green if ON, Red if OFF
+        painter.setBrush(QBrush(bg_color))
+        painter.setPen(Qt.NoPen)
+        rect = self.rect()
+        painter.drawRoundedRect(rect, rect.height()/2, rect.height()/2)
+        
+        # 2. Draw White Knob (The Icon Circle)
+        margin = 4
+        knob_size = rect.height() - (margin * 2)
+        knob_rect = QRect(0, margin, knob_size, knob_size)
+        
+        # According to your image:
+        # ON (Green) -> Circle is on the LEFT
+        # OFF (Red) -> Circle is on the RIGHT
+        if is_on:
+            knob_rect.moveLeft(margin)
+        else:
+            knob_rect.moveRight(rect.width() - margin)
+            
+        painter.setBrush(QBrush(QColor("white")))
+        painter.drawEllipse(knob_rect)
+        
+        # 3. Draw Text
+        painter.setPen(QColor("white"))
+        text = "Demo Mode: ON" if is_on else "Demo Mode: OFF"
+        # Align text opposite to the knob
+        if is_on:
+            # Knob is left, text on right
+            text_rect = rect.adjusted(knob_size + margin, 0, -margin, 0)
+        else:
+            # Knob is right, text on left
+            text_rect = rect.adjusted(margin, 0, -(knob_size + margin), 0)
+            
+        painter.drawText(text_rect, Qt.AlignCenter, text)
+
 class ECGTestPage(QWidget):
     LEADS_MAP = {
         "Lead II ECG Test": ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"],
@@ -818,7 +868,6 @@ class ECGTestPage(QWidget):
             ("Set Filter", self.ecg_menu.show_set_filter, "#fd7e14"),
             ("System Setup", self.ecg_menu.show_system_setup, "#6f42c1"),
             ("Load Default", self.ecg_menu.show_load_default, "#20c997"),
-            ("Version", self.ecg_menu.show_version_info, "#e83e8c"),
             ("Exit", self.ecg_menu.show_exit, "#495057")
         ]
         
@@ -889,12 +938,9 @@ class ECGTestPage(QWidget):
         
         created_buttons[6].clicked.disconnect()
         created_buttons[6].clicked.connect(self.ecg_menu.show_load_default)
-        
-        created_buttons[7].clicked.disconnect()
-        created_buttons[7].clicked.connect(self.ecg_menu.show_version_info)
 
-        created_buttons[8].clicked.disconnect()
-        created_buttons[8].clicked.connect(self.ecg_menu.show_exit)
+        created_buttons[7].clicked.disconnect()
+        created_buttons[7].clicked.connect(self.ecg_menu.show_exit)
 
         # Recording Toggle Button Section - Make it compact
         recording_frame = QFrame()
@@ -911,45 +957,38 @@ class ECGTestPage(QWidget):
         recording_layout = QVBoxLayout(recording_frame)
         recording_layout.setSpacing(4)  # Reduced spacing
 
-        # Demo toggle button - Add above capture screen button
-        self.demo_toggle = QPushButton("Demo: OFF")
-        self.demo_toggle.setCheckable(True)
+        # Demo toggle button - Custom Switch Style
+        self.demo_toggle = SwitchButton()
         self.demo_toggle.setChecked(False)
-        self.demo_toggle.setMinimumHeight(35)  # Same as other buttons
-        self.demo_toggle.setMaximumHeight(40)  # Same as other buttons
+        self.demo_toggle.setMinimumHeight(40)  # Same as other buttons
+        # self.demo_toggle.setMaximumHeight(40)  # Same as other buttons
         self.demo_toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
         # Set demo button style (toggle-style like recording button)
         self.demo_toggle.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #ffffff, stop:1 #f8f9fa);
-                color: #1a1a1a;
-                border: 2px solid #e9ecef;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 12px;
+                background: #ff4d4d; /* Red for OFF */
+                color: white;
+                border: 2px solid #e60000;
+                border-radius: 20px; /* Rounded pill shape like the image */
+                padding: 8px 16px;
+                font-size: 13px;
                 font-weight: bold;
                 text-align: center;
-                margin: 2px 0;
+                margin: 4px 0;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #fff5f0, stop:1 #ffe0cc);
-                border: 2px solid #ff6600;
-                color: #ff6600;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #ffe0cc, stop:1 #ffcc99);
-                border: 2px solid #ff6600;
-                color: #ff6600;
+                background: #ff6666;
+                border: 2px solid #ff1a1a;
             }
             QPushButton:checked {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #4CAF50, stop:1 #45a049);
-                border: 2px solid #4CAF50;
+                background: #2ecc71; /* Green for ON */
+                border: 2px solid #27ae60;
                 color: white;
+            }
+            QPushButton:checked:hover {
+                background: #40e080;
+                border: 2px solid #2ecc71;
             }
         """)
         
@@ -1312,8 +1351,9 @@ class ECGTestPage(QWidget):
 
     def update_demo_toggle_label(self):
         if hasattr(self, 'demo_toggle') and self.demo_toggle:
-            key = "Demo: ON" if self.demo_toggle.isChecked() else "Demo: OFF"
-            self.demo_toggle.setText(self.tr(key))
+            is_on = self.demo_toggle.isChecked()
+            text = "Demo Mode: ON" if is_on else "Demo Mode: OFF"
+            self.demo_toggle.setText(self.tr(text))
 
     def on_demo_toggle_changed(self, checked):
         self.update_demo_toggle_label()
@@ -4090,7 +4130,7 @@ class ECGTestPage(QWidget):
                 if 'st_interval' in self.metric_labels:
                     self.metric_labels['st_interval'].setText("0")
                 if 'qtc_interval' in self.metric_labels:
-                    self.metric_labels['qtc_interval'].setText("--")
+                    self.metric_labels['qtc_interval'].setText("0/0")
                 if 'time_elapsed' in self.metric_labels:
                     self.metric_labels['time_elapsed'].setText("00:00")
         except Exception:
@@ -4519,12 +4559,15 @@ class ECGTestPage(QWidget):
             self.is_recording = True
             
             # Update UI - only change button text, no status updates
-            self.recording_toggle.setText("STOP")
+            self.recording_toggle.setText(self.tr("Stop Recording"))
             
             # Start capture timer
             self.recording_timer = QTimer()
             self.recording_timer.timeout.connect(self.capture_frame)
             self.recording_timer.start(33)  # ~30 FPS
+
+            # Show notification as recording started
+            QMessageBox.information(self, self.tr("Success"), self.tr("Recording started"))
             
         except Exception as e:
             QMessageBox.warning(self, "Recording Error", f"Failed to start recording: {str(e)}")
@@ -4539,7 +4582,7 @@ class ECGTestPage(QWidget):
                 self.recording_timer.stop()
             
             # Update UI - only change button text, no status updates
-            self.recording_toggle.setText("RECORD")
+            self.recording_toggle.setText(self.tr("Record Screen"))
             
             # Ask user if they want to save the recording
             if len(self.recording_frames) > 0:
@@ -7192,7 +7235,6 @@ class ECGTestPage(QWidget):
                 ax.set_ylabel(ax.get_ylabel(), color='#333333', fontsize=14, fontweight='bold', labelpad=15)
                 for spine in ax.spines.values():
                     spine.set_visible(False)
-                ax.figure.canvas.draw()
             
             for line in self._overlay_lines:
                 line.set_color('#0066cc')
@@ -7225,7 +7267,7 @@ class ECGTestPage(QWidget):
             self._apply_graph_mode()
         
         if hasattr(self, '_overlay_canvas'):
-            self._overlay_canvas.draw()
+            self._overlay_canvas.draw_idle()
 
     def _clear_all_backgrounds(self):
         
@@ -7279,7 +7321,7 @@ class ECGTestPage(QWidget):
         Adjust minor grid density for 12x1 vs 6x2 overlay modes.
         """
         try:
-            from matplotlib.lines import Line2D
+            from matplotlib.collections import LineCollection
 
             bg_color = '#ffe7eb'
             minor_color = '#ffd1d1'
@@ -7303,9 +7345,9 @@ class ECGTestPage(QWidget):
 
                 # Clear any previous grid/background
                 if hasattr(fig, '_grid_lines'):
-                    for line in fig._grid_lines:
+                    for artist in fig._grid_lines:
                         try:
-                            line.remove()
+                            artist.remove()
                         except:
                             pass
                     fig._grid_lines = []
@@ -7318,8 +7360,6 @@ class ECGTestPage(QWidget):
                     except:
                         pass
 
-                grid_lines = []
-
                 # --- True 1mm / 5mm grid based on figure physical size ---
                 mm_per_inch = 25.4
                 fig_width_in = fig.get_figwidth()
@@ -7330,27 +7370,20 @@ class ECGTestPage(QWidget):
                 # Fraction of figure for 1mm step in each direction
                 minor_step_x = 1.0 / width_mm
                 minor_step_y = 1.0 / height_mm
-                major_step_x = minor_step_x * 5.0  # 5mm
-                major_step_y = minor_step_y * 5.0
+                v_lines_minor = []
+                v_lines_major = []
+                h_lines_minor = []
+                h_lines_major = []
 
                 # Vertical lines (time axis)
                 x = 0.0
                 idx = 0
                 while x <= 1.0 + 1e-9:
                     is_major = (idx % 5 == 0)
-                    color = major_color if is_major else minor_color
-                    width = 1.0 if is_major else 0.6
-                    for ax in getattr(self, '_overlay_axes', []):
-                        line = Line2D(
-                            [x, x], [0, 1],
-                            transform=fig.transFigure,
-                            color=color,
-                            linewidth=width,
-                            alpha=0.9,
-                            zorder=0,
-                        )
-                        ax.add_line(line)
-                        grid_lines.append(line)
+                    if is_major:
+                        v_lines_major.append([(x, 0), (x, 1)])
+                    else:
+                        v_lines_minor.append([(x, 0), (x, 1)])
                     x += minor_step_x
                     idx += 1
 
@@ -7359,26 +7392,35 @@ class ECGTestPage(QWidget):
                 jdx = 0
                 while y <= 1.0 + 1e-9:
                     is_major = (jdx % 5 == 0)
-                    color = major_color if is_major else minor_color
-                    width = 1.0 if is_major else 0.6
-                    for ax in getattr(self, '_overlay_axes', []):
-                        line = Line2D(
-                            [0, 1], [y, y],
-                            transform=fig.transFigure,
-                            color=color,
-                            linewidth=width,
-                            alpha=0.9,
-                            zorder=0,
-                        )
-                        ax.add_line(line)
-                        grid_lines.append(line)
+                    if is_major:
+                        h_lines_major.append([(0, y), (1, y)])
+                    else:
+                        h_lines_minor.append([(0, y), (1, y)])
                     y += minor_step_y
                     jdx += 1
 
-                fig._grid_lines = grid_lines
+                grid_artists = []
+                
+                # Add minor grid (drawn first, behind major)
+                if v_lines_minor or h_lines_minor:
+                    minor_lc = LineCollection(v_lines_minor + h_lines_minor, 
+                                             colors=minor_color, linewidths=0.6, 
+                                             alpha=0.9, zorder=0, transform=fig.transFigure)
+                    fig.add_artist(minor_lc)
+                    grid_artists.append(minor_lc)
+                
+                # Add major grid
+                if v_lines_major or h_lines_major:
+                    major_lc = LineCollection(v_lines_major + h_lines_major, 
+                                             colors=major_color, linewidths=1.0, 
+                                             alpha=0.9, zorder=0, transform=fig.transFigure)
+                    fig.add_artist(major_lc)
+                    grid_artists.append(major_lc)
+
+                fig._grid_lines = grid_artists
 
             # Make all axes transparent
-            for i, ax in enumerate(self._overlay_axes):
+            for ax in getattr(self, '_overlay_axes', []):
                 ax.set_facecolor('none')
                 ax.patch.set_alpha(0.0)
                 ax.grid(False)
@@ -7388,18 +7430,13 @@ class ECGTestPage(QWidget):
                 ax.set_yticks([])
                 ax.set_ylabel(ax.get_ylabel(), color='#333333',
                             fontsize=12, fontweight='bold', labelpad=12)
-                ax.set_xlim(0, self.buffer_size - 1)
-                ax.set_ylim(-500, 500)
 
             # ECG line style
-            for line in self._overlay_lines:
+            for line in getattr(self, '_overlay_lines', []):
                 line.set_color('#000000')
-                line.set_linewidth(0.7)
+                line.set_linewidth(0.8)
                 line.set_alpha(1.0)
                 line.set_zorder(50)
-
-            if hasattr(self, '_overlay_canvas'):
-                self._overlay_canvas.draw()
 
         except Exception as e:
             print(f"Error applying graph mode: {e}")

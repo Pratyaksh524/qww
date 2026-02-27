@@ -740,6 +740,11 @@ class HyperkalemiaTestWindow(QWidget):
                                 values_array = apply_ac_filter(values_array, fs, ac_val)
                             if emg_val not in ["Off", "off"]:
                                 values_array = apply_emg_filter(values_array, fs, emg_val)
+
+                            edge_trim = int(0.5 * fs)
+                            if len(values_array) > 2 * edge_trim:
+                                values_array = values_array[edge_trim:-edge_trim]
+                                
                             values = values_array.tolist()
                     except ImportError:
                         pass
