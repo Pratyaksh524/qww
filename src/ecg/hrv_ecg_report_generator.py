@@ -18,6 +18,8 @@ import numpy as np
 # Set matplotlib to use non-interactive backend
 matplotlib.use('Agg')
 
+ECG_BASELINE_ADC = 2000.0
+
 # ------------------------ Resource path helper for PyInstaller compatibility ------------------------
 
 def _get_resource_path(relative_path):
@@ -612,8 +614,8 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         # Convert to numpy array
         adc_data = np.array(ecg_data, dtype=float)
         
-        # Apply baseline 2000 (subtract baseline from ADC values)
-        baseline_adc = 2000.0
+        # Apply baseline (subtract baseline from ADC values)
+        baseline_adc = ECG_BASELINE_ADC
         centered_adc = adc_data - baseline_adc
         
         # Calculate ADC per box based on wave_gain and lead-specific multiplier
@@ -1494,7 +1496,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                         
                         # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                         # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
+                        baseline_adc = ECG_BASELINE_ADC
                         lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
                         lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
                         
@@ -1569,7 +1571,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                             
                             # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                             # This ensures calculated leads are centered around 0, not around baseline
-                            baseline_adc = 2000.0
+                            baseline_adc = ECG_BASELINE_ADC
                             lead_i_centered = np.array(lead_i_slice, dtype=float) - baseline_adc
                             lead_ii_centered = np.array(lead_ii_slice, dtype=float) - baseline_adc
                             
@@ -1655,8 +1657,8 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                 ecg_width = 460
                 ecg_height = 45
                 
-                # Create time array for ALL data
-                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
+                from reportlab.lib.units import mm as mm_unit
+                t = np.linspace(x_pos + mm_unit, x_pos + ecg_width, len(real_ecg_data))
                 
                 
                 # Step 1: Convert ADC data to numpy array
@@ -1679,10 +1681,10 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                 
                 # Step 1: Apply baseline correction based on data type
                 data_mean = np.mean(adc_data)
-                baseline_adc = 2000.0
+                baseline_adc = ECG_BASELINE_ADC
                 is_calculated_lead = lead in ["III", "aVR", "aVL", "aVF", "-aVR"]
                 
-                if abs(data_mean - 2000.0) < 500:  # Data is close to baseline 2000 (raw ADC)
+                if abs(data_mean - ECG_BASELINE_ADC) < 500:  # Data is close to baseline 2000 (raw ADC)
                     baseline_corrected = adc_data - baseline_adc
                 elif is_calculated_lead:
                     baseline_corrected = adc_data  # Calculated leads already centered
@@ -2490,8 +2492,6 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
             y_pos = doc.height + doc.bottomMargin - 5  # 20 points from top
             
             # Always draw "Org." label with value
-            canvas.setFont("Helvetica-Bold", 10)
-            canvas.setFillColor(colors.black)
             org_label = "Org:"
             canvas.drawString(x_pos, y_pos, org_label)
             
@@ -2852,7 +2852,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
     # Calculate average Heart Rate from 5 minutes of data (to use in report)
     hr_per_minute_for_report = []
 
-    segment_duration = 11.0  # Same as ECG graphs: 11 seconds per strip
+    segment_duration = 10.0  # Same as ECG graphs: 11 seconds per strip
     values_all_pre = np.array([d['value'] for d in captured_data], dtype=float) if captured_data else np.array([])
     per_minute_samples_pre = 500 * 60
     total_samples_pre = len(values_all_pre)
@@ -3253,7 +3253,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         print(f"⚠️ HRV lead '{selected_lead}' not supported, defaulting to Lead II")
         selected_lead = "II"
     adc_per_box_multiplier = ADC_PER_BOX_CONFIG.get(selected_lead, 6400.0)
-    baseline_adc = 2000.0  #
+    baseline_adc = ECG_BASELINE_ADC  # Use common constant
     
     successful_graphs = 0
     
@@ -3342,7 +3342,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         # Go down back to baseline
         notch_path.lineTo(notch_x + notch_width, notch_y_base)
         # Connect notch end to ECG starting point (baseline continuation) - SHIFTED DOWN 25 points
-        notch_path.lineTo(x_pos, center_y + 25)  # Draw line from notch end to ECG start shifted down
+        notch_path.lineTo(x_pos + mm_unit, center_y + 25)
         
         # Add notch to drawing (ALWAYS, regardless of data)
         master_drawing.add(notch_path)
@@ -3382,8 +3382,8 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
             if len(segment_data) > 0:
                 values = np.array([d['value'] for d in segment_data], dtype=float)
                 
-                # Create time array for drawing
-                t = np.linspace(x_pos, x_pos + ecg_width, len(values))
+                from reportlab.lib.units import mm as mm_unit
+                t = np.linspace(x_pos + mm_unit, x_pos + ecg_width, len(values))
                 
                 # ========== EXACT SAME SCALING LOGIC AS MAIN REPORT (Lines 2665-2740) ==========
                 
@@ -3392,9 +3392,9 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
                 
                 # Step 1: Apply baseline correction for Lead II
                 data_mean = np.mean(adc_data)
-                baseline_adc = 2000.0
+                baseline_adc = ECG_BASELINE_ADC
                 
-                if abs(data_mean - 2000.0) < 500:  # Data is close to baseline 2000 (raw ADC)
+                if abs(data_mean - ECG_BASELINE_ADC) < 500:  # Data is close to baseline 2000 (raw ADC)
                     baseline_corrected = adc_data - baseline_adc
                 else:
                     baseline_corrected = adc_data  # Already processed data
@@ -3660,7 +3660,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
     # Calculate per-minute RR intervals and HR for bar charts
     # 🎯 Minutes available based on captured duration
     import math
-    segment_duration = 11.0  # Strip display remains 11s per strip
+    segment_duration = 10.0  # Strip display remains 11s per strip
     total_duration = max(d['time'] for d in captured_data) if captured_data else 0
     num_segments = max(1, min(5, int(total_duration // 60.0) + (1 if total_duration % 60.0 >= 1.0 else 0)))
     

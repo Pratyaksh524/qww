@@ -83,3 +83,18 @@ class SettingsManager:
     
     def set_baud_rate(self, baud_rate):
         self.set_setting("baud_rate", baud_rate)
+
+    def get_calibration_notch_boxes(self):
+        """Calculate calibration notch boxes based on wave gain"""
+        wave_gain = self.get_wave_gain()
+        if wave_gain == 20:
+            return 4.0
+        elif wave_gain == 10:
+            return 2.0
+        elif wave_gain == 5:
+            return 1.0
+        elif wave_gain == 2.5:
+            return 0.5
+        else:
+            # Default calculation for other values
+            return wave_gain / 5.0  # 5mm = 1 box baseline

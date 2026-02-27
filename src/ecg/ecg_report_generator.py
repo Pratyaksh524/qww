@@ -22,7 +22,7 @@ ECG_LARGE_BOX_MM = 210.0 / 40.0
 ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0
 # Scale wave speed so 1 second equals 5 large boxes at 25 mm/s on 40-box grid
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
-FIXED_SAMPLES_PER_LEAD = 3500
+FIXED_SAMPLES_PER_LEAD = 4000
 
 # ------------------------ Resource path helper for PyInstaller compatibility ------------------------
 
@@ -334,13 +334,13 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     """
     Calculate optimal time window based on BPM and wave_speed
     
-    Important: Report ECG graph width = 33 boxes × ECG_LARGE_BOX_MM
+    Important: Report ECG graph width = 37 boxes × ECG_LARGE_BOX_MM
      wave_speed time calculate factor use :
         Time from wave_speed = (graph_width_mm / effective_wave_speed_mm_s) seconds
     
     Formula:
         - Time window = (graph_width_mm / effective_wave_speed_mm_s) seconds ONLY
-          (33 boxes × ECG_LARGE_BOX_MM)
+          (37 boxes × ECG_LARGE_BOX_MM)
         - BPM window is NOT used - only wave speed window
         - Beats = (BPM / 60) × time_window
         - Final window clamped maximum 20 seconds (NO minimum clamp)
@@ -349,9 +349,9 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     Returns: (time_window_seconds, num_samples)
     """
     # Calculate time window from wave_speed ONLY (BPM window NOT used)
-    # Report ECG graph width = 33 boxes × ECG_LARGE_BOX_MM
+    # Report ECG graph width = 37 boxes × ECG_LARGE_BOX_MM
     # Time = Distance / Speed (scaled for 40-box grid)
-    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
     effective_wave_speed_mm_s = wave_speed_mm_s * ECG_SPEED_SCALE
     calculated_time_window = ecg_graph_width_mm / max(1e-6, effective_wave_speed_mm_s)
     
@@ -367,7 +367,7 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     expected_beats = beats_per_second * calculated_time_window
     
     print(f" Time Window Calculation (Wave Speed ONLY):")
-    print(f"   Graph Width: {ecg_graph_width_mm:.2f}mm (33 boxes × {ECG_LARGE_BOX_MM:.2f}mm)")
+    print(f"   Graph Width: {ecg_graph_width_mm:.2f}mm (37 boxes × {ECG_LARGE_BOX_MM:.2f}mm)")
     print(f"   Wave Speed: {wave_speed_mm_s}mm/s (effective {effective_wave_speed_mm_s:.2f}mm/s)")
     print(f"   Time Window: {ecg_graph_width_mm:.2f} / {effective_wave_speed_mm_s:.2f} = {calculated_time_window:.2f}s")
     print(f"   BPM: {hr_bpm} → Beats per second: {hr_bpm}/60 = {beats_per_second:.2f} beats/sec")
@@ -597,8 +597,8 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (37 boxes)
+                    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" DEMO MODE ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -1132,10 +1132,10 @@ def generate_ecg_report(
     data["wave_gain_mm_mv"] = wave_gain_mm_mv
 
     print(f" Pre-plot checks: HR_bpm={hr_bpm_value}, RR_ms={data['RR_ms']}, wave_speed={wave_speed_mm_s}mm/s, wave_gain={wave_gain_mm_mv}mm/mV, sampling_rate={computed_sampling_rate}Hz")
-    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
     effective_wave_speed_mm_s = wave_speed_mm_s * ECG_SPEED_SCALE
     print(f" Calculation-based beats formula:")
-    print(f"   Graph width: 33 boxes × {ECG_LARGE_BOX_MM:.2f}mm = {ecg_graph_width_mm:.2f}mm")
+    print(f"   Graph width: 37 boxes × {ECG_LARGE_BOX_MM:.2f}mm = {ecg_graph_width_mm:.2f}mm")
     print(f"   BPM window: (desired_beats × 60) / {hr_bpm_value} = {(6 * 60.0 / hr_bpm_value) if hr_bpm_value > 0 else 0:.2f}s")
     print(f"   Wave speed window: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {ecg_graph_width_mm / max(1e-6, effective_wave_speed_mm_s):.2f}s")
     
@@ -1417,7 +1417,7 @@ def generate_ecg_report(
     for i, lead in enumerate(lead_order):
         lead_positions.append({
             "lead": lead, 
-            "x": 60, 
+            "x": 60 - (3.0 * ECG_LARGE_BOX_MM * mm), 
             "y": y_positions[i]
         })
     
@@ -1445,8 +1445,8 @@ def generate_ecg_report(
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (37 boxes)
+                    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" Report Generator: Demo mode ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -1478,7 +1478,7 @@ def generate_ecg_report(
         y_pos = pos_info['y']
         try:
             from reportlab.graphics.shapes import String, Group
-            lead_label = String(3.5 * mm, y_pos + 7.1 * mm, f"{lead}", fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
+            lead_label = String(3.5 * mm, y_pos + 7.1 * mm + (1.5 * ECG_LARGE_BOX_MM * mm), f"{lead}", fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
             master_drawing.add(lead_label)
             if lead in lead_drawings:
                 sub = lead_drawings[lead]
@@ -1603,7 +1603,7 @@ def generate_ecg_report(
     for i, lead in enumerate(lead_order):
         lead_positions.append({
             "lead": lead, 
-            "x": 60, 
+            "x": 60 - (3.0 * ECG_LARGE_BOX_MM * mm), 
             "y": y_positions[i]
         })
     
@@ -1631,8 +1631,8 @@ def generate_ecg_report(
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (37 boxes)
+                    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" Report Generator: Demo mode ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -1666,7 +1666,7 @@ def generate_ecg_report(
         try:
             # STEP 3A: Add lead label directly
             from reportlab.graphics.shapes import String
-            lead_label = String(3.5 * mm, y_pos + 7.1 * mm, f"{lead}", 
+            lead_label = String(3.5 * mm, y_pos + 7.1 * mm + (1.5 * ECG_LARGE_BOX_MM * mm), f"{lead}", 
                               fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
             master_drawing.add(lead_label)
             
@@ -1890,8 +1890,8 @@ def generate_ecg_report(
 
             if real_data_available and len(real_ecg_data) > 0:
                 # Draw ALL REAL ECG data - NO LIMITS
-                # Match paper scale: 33 boxes × ECG_LARGE_BOX_MM
-                ecg_width = 33 * ECG_LARGE_BOX_MM * mm
+                # Match paper scale: 37 boxes × ECG_LARGE_BOX_MM
+                ecg_width = 37 * ECG_LARGE_BOX_MM * mm
                 ecg_height = 45
                 
                 # Create time array for ALL data
@@ -2016,7 +2016,23 @@ def generate_ecg_report(
                 
                 print(f" Drew {len(real_ecg_data)} ECG data points for Lead {lead}")
             else:
-                print(f" No real data for Lead {lead} - showing grid only")
+                print(f" No real data for Lead {lead} - showing flat line")
+                # Draw flat line when no real data available (like dashboard)
+                from reportlab.lib.units import mm
+                from reportlab.graphics.shapes import Line, Path
+                
+                # Calculate center_y same as real data section
+                ecg_height = 45  # Same as real data section
+                center_y = y_pos + (ecg_height / 2.0)  # Center of graph in points
+                
+                # Draw flat line at center (baseline)
+                flat_line_start_x = x_pos + 15.0  # Same start as real data
+                flat_line_end_x = x_pos + 33 * ECG_LARGE_BOX_MM * mm  # Same end as real data
+                flat_line_y = center_y  # Center/baseline position
+                
+                flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
+                              strokeColor=colors.HexColor("#000000"), strokeWidth=1.2)
+                master_drawing.add(flat_line)
                 
                 # Add calibration notch 15 points after ECG strip starts even when no data is available
                 print(f" DEBUG: Adding calibration notch for Lead {lead} (no data case)")
@@ -2175,7 +2191,7 @@ def generate_ecg_report(
     for i, lead in enumerate(lead_order):
         lead_positions.append({
             "lead": lead, 
-            "x": 60, 
+            "x": 60 - (3.0 * ECG_LARGE_BOX_MM * mm), 
             "y": y_positions[i]
         })
     
@@ -2203,8 +2219,8 @@ def generate_ecg_report(
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (37 boxes)
+                    ecg_graph_width_mm = 37 * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" Report Generator: Demo mode ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -2252,7 +2268,7 @@ def generate_ecg_report(
         try:
             # STEP 3A: Add lead label directly
             from reportlab.graphics.shapes import String
-            lead_label = String(3.5 * mm, y_pos + 7.1 * mm, f"{lead}", 
+            lead_label = String(3.5 * mm, y_pos + 7.1 * mm + (1.5 * ECG_LARGE_BOX_MM * mm), f"{lead}", 
                               fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
             master_drawing.add(lead_label)
             
@@ -2458,8 +2474,8 @@ def generate_ecg_report(
             
             if real_data_available and len(real_ecg_data) > 0:
                 # Draw ALL REAL ECG data - NO LIMITS
-                # Match paper scale: 33 boxes × ECG_LARGE_BOX_MM
-                ecg_width = 33 * ECG_LARGE_BOX_MM * mm
+                # Match paper scale: 37 boxes × ECG_LARGE_BOX_MM
+                ecg_width = 37 * ECG_LARGE_BOX_MM * mm
                 ecg_height = 45
                 
                 # Create time array for ALL data
@@ -2545,9 +2561,19 @@ def generate_ecg_report(
                 from reportlab.lib.units import mm
                 from reportlab.graphics.shapes import Path
                 
-                # Calibration notch dimensions (1 box wide, 2 boxes tall)
+                # Dynamic calibration notch based on wave gain
+                try:
+                    from utils.settings_manager import SettingsManager
+                    settings_mgr = SettingsManager()
+                    notch_boxes = settings_mgr.get_calibration_notch_boxes()
+                    print(f" Dynamic notch: {notch_boxes} boxes for gain {settings_mgr.get_wave_gain()}mm/mV")
+                except Exception as e:
+                    print(f" Could not get dynamic notch, using default: {e}")
+                    notch_boxes = 2.0  # Default fallback
+                
+                # Calibration notch dimensions (1 box wide, dynamic boxes tall)
                 notch_width_mm = ECG_LARGE_BOX_MM
-                notch_height_mm = 2.0 * ECG_LARGE_BOX_MM
+                notch_height_mm = notch_boxes * ECG_LARGE_BOX_MM
                 notch_width = notch_width_mm * mm
                 notch_height = notch_height_mm * mm
                 
@@ -2578,8 +2604,24 @@ def generate_ecg_report(
                 
                 print(f" Drew {len(real_ecg_data)} ECG data points for Lead {lead}")
             else:
-                print(f" No real data for Lead {lead} - showing grid only")
+                print(f" No real data for Lead {lead} - showing flat line")
                 
+                # Draw flat line when no real data available (like dashboard)
+                from reportlab.lib.units import mm
+                from reportlab.graphics.shapes import Line, Path
+                
+                # Calculate center_y same as real data section
+                ecg_height = 45  # Same as real data section
+                center_y = y_pos + (ecg_height / 2.0)  # Center of graph in points
+                
+                # Draw flat line at center (baseline)
+                flat_line_start_x = x_pos + 15.0  # Same start as real data
+                flat_line_end_x = x_pos + 33 * ECG_LARGE_BOX_MM * mm  # Same end as real data
+                flat_line_y = center_y  # Center/baseline position
+                
+                flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
+                              strokeColor=colors.HexColor("#000000"), strokeWidth=1.2)
+                master_drawing.add(flat_line)
                 # Add calibration notch 15 points after ECG strip starts even when no data is available
                 print(f" DEBUG: Adding calibration notch for Lead {lead} (no data case)")
                 from reportlab.lib.units import mm

@@ -26,7 +26,7 @@ ECG_LARGE_BOX_MM = 210.0 / 40.0  # = 5.25mm
 ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0  # = 1.05mm
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM  # = 1.05
 SIX_TWO_SAMPLES_COLUMN = 2500
-SIX_TWO_SAMPLES_EXTRA_II = 3500
+SIX_TWO_SAMPLES_EXTRA_II = 4500
 
 # UNIFIED BOX CONFIGURATION
 COLUMN1_BOXES = 26.3
@@ -712,7 +712,7 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         
         print(f" Drew ALL {len(ecg_data)} ECG data points for {lead_name} - showing MAXIMUM heartbeats!")
     else:
-        print(f" No real data available for {lead_name} - showing grid only")
+        print(f" No real data available for {lead_name} - showing flat line")
     
     return drawing
 
@@ -1879,7 +1879,9 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     # Column 2 leads keep original position
                     adjusted_x_pos = x_pos
                 
-                t = np.linspace(adjusted_x_pos, adjusted_x_pos + ecg_width, len(real_ecg_data))
+                from reportlab.lib.units import mm as _mm_units
+                gap = _mm_units if (lead in column1_leads) else 0
+                t = np.linspace(adjusted_x_pos + gap, adjusted_x_pos + ecg_width, len(real_ecg_data))
                 
                 
                 
@@ -2395,7 +2397,9 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     # Column 2 leads keep original position
                     adjusted_x_pos = x_pos
                 
-                t = np.linspace(adjusted_x_pos, adjusted_x_pos + ecg_width, len(real_ecg_data))
+                from reportlab.lib.units import mm as _mm_units
+                gap = _mm_units if (lead in column1_leads) else 0
+                t = np.linspace(adjusted_x_pos + gap, adjusted_x_pos + ecg_width, len(real_ecg_data))
                 
                 
                 # Step 1: Convert ADC data to numpy array
@@ -2497,8 +2501,19 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 print(f" DEBUG: Checking notch for Lead {lead} - is in column1: {lead in ['I', 'II', 'III', 'aVR', 'aVL', 'aVF']}")
                 if lead in ["I", "II", "III", "aVR", "aVL", "aVF"]:
                     print(f" DEBUG: Creating calibration notch for Lead {lead}")
-                    notch_width_mm = 5.0   # width 5mm
-                    notch_height_mm = 10.0 # height 10mm
+                    
+                    # Dynamic calibration notch based on wave gain
+                    try:
+                        from utils.settings_manager import SettingsManager
+                        settings_mgr = SettingsManager()
+                        notch_boxes = settings_mgr.get_calibration_notch_boxes()
+                        print(f" Dynamic notch: {notch_boxes} boxes for gain {settings_mgr.get_wave_gain()}mm/mV")
+                    except Exception as e:
+                        print(f" Could not get dynamic notch, using default: {e}")
+                        notch_boxes = 2.0  # Default fallback
+                    
+                    notch_width_mm = 5.0   # width 5mm (fixed)
+                    notch_height_mm = notch_boxes * 5.0  # height = boxes × 5mm per box
                     notch_width = notch_width_mm * mm
                     notch_height = notch_height_mm * mm
                     
@@ -2532,8 +2547,24 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 if lead in ["I", "II", "III", "aVR", "aVL", "aVF"] and notch_path:
                     print(f" Added calibration notch for Lead {lead}")
             else:
-                print(f" No real data for Lead {lead} - showing grid only")
-                print(f" DEBUG: real_data_available={real_data_available}, saved_ecg_data exists={saved_ecg_data is not None}")
+                print(f" No real data for Lead {lead} - showing flat line")
+                
+                # Draw flat line when no real data available (like dashboard)
+                from reportlab.lib.units import mm
+                from reportlab.graphics.shapes import Line, Path
+                
+                # Calculate center_y same as real data section
+                ecg_height = 45  # Same as real data section
+                center_y = y_pos + (ecg_height / 2.0)  # Center of graph in points
+                
+                # Draw flat line at center (baseline)
+                flat_line_start_x = x_pos + 15.0  # Same start as real data
+                flat_line_end_x = x_pos + 33 * ECG_LARGE_BOX_MM * mm  # Same end as real data
+                flat_line_y = center_y  # Center/baseline position
+                
+                flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
+                              strokeColor=colors.HexColor("#000000"), strokeWidth=1.2)
+                master_drawing.add(flat_line)
                 if saved_ecg_data and 'leads' in saved_ecg_data:
                     print(f" DEBUG: Available leads in saved data: {list(saved_ecg_data['leads'].keys())}")
                 
@@ -2544,8 +2575,18 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     from reportlab.lib.units import mm
                     from reportlab.graphics.shapes import Path
                     
-                    notch_width_mm = 5.0   # width 5mm
-                    notch_height_mm = 10.0 # height 10mm
+                    # Dynamic calibration notch based on wave gain
+                    try:
+                        from utils.settings_manager import SettingsManager
+                        settings_mgr = SettingsManager()
+                        notch_boxes = settings_mgr.get_calibration_notch_boxes()
+                        print(f" Dynamic notch (no data): {notch_boxes} boxes for gain {settings_mgr.get_wave_gain()}mm/mV")
+                    except Exception as e:
+                        print(f" Could not get dynamic notch (no data), using default: {e}")
+                        notch_boxes = 2.0  # Default fallback
+                    
+                    notch_width_mm = 5.0   # width 5mm (fixed)
+                    notch_height_mm = notch_boxes * 5.0  # height = boxes × 5mm per box
                     notch_width = notch_width_mm * mm
                     notch_height = notch_height_mm * mm
                     
@@ -2615,8 +2656,7 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     # STEP 3.6: Add extra Lead II ECG strip and calibration notch (45 points below aVF)
     # Get Lead II data for the extra strip - EXACTLY SAME AS ORIGINAL LEAD II PROCESSING
     extra_lead_ii_raw_data = None
-    extra_lead_ii_data = None  # Initialize to prevent undefined variable error
-    extra_lead_ii_width = EXTRA_LEAD2_BOXES * ECG_LARGE_BOX_MM * mm  # Use configured boxes width (points)
+    extra_lead_ii_data = None
     
     # Try to get Lead II data from saved_ecg_data - EXACTLY LIKE ORIGINAL LEAD II
     if saved_ecg_data and 'leads' in saved_ecg_data and "II" in saved_ecg_data['leads']:
@@ -2625,7 +2665,16 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         
         if len(extra_lead_ii_raw_data) > 0:
             saved_data_samples = len(extra_lead_ii_raw_data)
-            num_samples_to_capture = SIX_TWO_SAMPLES_EXTRA_II
+            from reportlab.lib.units import mm as _mm_units
+            right_margin = 10
+            extra_lead_ii_x_pos_calc = 20 - 45
+            extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
+            width_points_calc = max(0, (total_width - extra_lead_ii_adjusted_x_pos_calc) - right_margin)
+            effective_wave_speed = wave_speed_mm_s * ECG_SPEED_SCALE
+            time_window_seconds = (width_points_calc / _mm_units) / max(1e-6, effective_wave_speed)
+            num_samples_to_capture = int(time_window_seconds * computed_sampling_rate)
+            if num_samples_to_capture <= 0:
+                num_samples_to_capture = SIX_TWO_SAMPLES_EXTRA_II
             if saved_data_samples < num_samples_to_capture:
                 print(f" Extra Lead II has only {saved_data_samples} samples, using all available data")
                 extra_lead_ii_data_to_use = extra_lead_ii_raw_data
@@ -2638,8 +2687,18 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     elif ecg_test_page and hasattr(ecg_test_page, 'data') and len(ecg_test_page.data) > 1:
         extra_lead_ii_raw_data = ecg_test_page.data[1]
         print(f" Found Lead II raw data from live dashboard: {len(extra_lead_ii_raw_data)} points")
-        if len(extra_lead_ii_raw_data) > SIX_TWO_SAMPLES_EXTRA_II:
-            extra_lead_ii_data = extra_lead_ii_raw_data[-SIX_TWO_SAMPLES_EXTRA_II:]
+        from reportlab.lib.units import mm as _mm_units
+        right_margin = 10
+        extra_lead_ii_x_pos_calc = 20 - 45
+        extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
+        width_points_calc = max(0, (total_width - extra_lead_ii_adjusted_x_pos_calc) - right_margin)
+        effective_wave_speed = wave_speed_mm_s * ECG_SPEED_SCALE
+        time_window_seconds = (width_points_calc / _mm_units) / max(1e-6, effective_wave_speed)
+        num_samples_to_capture = int(time_window_seconds * computed_sampling_rate)
+        if num_samples_to_capture <= 0:
+            num_samples_to_capture = SIX_TWO_SAMPLES_EXTRA_II
+        if len(extra_lead_ii_raw_data) > num_samples_to_capture:
+            extra_lead_ii_data = extra_lead_ii_raw_data[-num_samples_to_capture:]
         else:
             extra_lead_ii_data = extra_lead_ii_raw_data
     
@@ -2647,13 +2706,13 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     if extra_lead_ii_data is not None and len(extra_lead_ii_data) > 0:
         print(f" Drawing extra Lead II ECG strip with {len(extra_lead_ii_data)} points")
         
-        # Calculate ECG strip position (same X as other column1 leads, Y = extra_lead_ii_y_pos)
-        extra_lead_ii_x_pos = 20 - 45  # Same as other column1 leads: -25
-        extra_lead_ii_adjusted_x_pos = extra_lead_ii_x_pos + 30  # Same adjusted_x_pos: -25 + 30 = 5
-        extra_lead_ii_y = extra_lead_ii_y_pos  # Same Y as the extra label
-        
-        # Calculate ECG width based on configured boxes width
-        extra_lead_ii_height = 45  # Same height as other leads
+        extra_lead_ii_x_pos = 20 - 45
+        extra_lead_ii_adjusted_x_pos = extra_lead_ii_x_pos + 30
+        extra_lead_ii_y = extra_lead_ii_y_pos
+        from reportlab.lib.units import mm as _mm_units
+        right_margin = 10
+        extra_lead_ii_width_points = max(0, (total_width - extra_lead_ii_adjusted_x_pos) - right_margin)
+        extra_lead_ii_height = 45
         
         # Get wave_gain for amplitude scaling
         wave_gain_mm_mv = 10.0  # Default
@@ -2704,8 +2763,8 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         center_y_wave = center_y_notch
         ecg_normalized = center_y_wave + (boxes_offset * box_height_points)
         
-        # Create time array (full page width)
-        t = np.linspace(extra_lead_ii_adjusted_x_pos, extra_lead_ii_adjusted_x_pos + extra_lead_ii_width, len(extra_lead_ii_data))
+        from reportlab.lib.units import mm as _mm_units
+        t = np.linspace(extra_lead_ii_adjusted_x_pos + _mm_units, extra_lead_ii_adjusted_x_pos + extra_lead_ii_width_points, len(extra_lead_ii_data))
         
         # Draw ECG strip
         from reportlab.graphics.shapes import Path
@@ -2729,8 +2788,19 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         
         # Add calibration notch for extra Lead II
         from reportlab.lib.units import mm
-        notch_width_mm = 5.0   # width 5mm
-        notch_height_mm = 10.0 # height 10mm
+        
+        # Dynamic calibration notch based on wave gain
+        try:
+            from utils.settings_manager import SettingsManager
+            settings_mgr = SettingsManager()
+            notch_boxes = settings_mgr.get_calibration_notch_boxes()
+            print(f" Dynamic notch (extra Lead II): {notch_boxes} boxes for gain {settings_mgr.get_wave_gain()}mm/mV")
+        except Exception as e:
+            print(f" Could not get dynamic notch (extra Lead II), using default: {e}")
+            notch_boxes = 2.0  # Default fallback
+        
+        notch_width_mm = 5.0   # width 5mm (fixed)
+        notch_height_mm = notch_boxes * 5.0  # height = boxes × 5mm per box
         notch_width = notch_width_mm * mm
         notch_height = notch_height_mm * mm
         
@@ -3798,3 +3868,5 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
 
 
 # ====================  REPORT WRAPPER 6_2 ====================
+# Duplicate clear
+

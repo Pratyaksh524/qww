@@ -710,6 +710,8 @@ class ECGTestPage(QWidget):
     
         # Initialize demo manager
         self.demo_manager = DemoManager(self)
+        # Timer tracking for countdown timers
+        self.countdown_timers = []  # Store active QTimer instances for cancellation
 
         self.grid_widget = QWidget()
         self.detailed_widget = QWidget()
@@ -1358,47 +1360,75 @@ class ECGTestPage(QWidget):
     def on_demo_toggle_changed(self, checked):
         self.update_demo_toggle_label()
         self.demo_manager.toggle_demo_mode(checked)
-        if hasattr(self, 'generate_report_btn'):
+        if hasattr(self, "generate_report_btn"):
             if checked:
+                # Demo mode ON - Start countdown
                 try:
-                    countdown_start = 12
-                    self.generate_report_btn.setEnabled(False)
-                    self.generate_report_btn.setText(f"Generate Report ({countdown_start})")
-
-                    for remaining in range(countdown_start - 1, 0, -1):
-                        delay_ms = (countdown_start - remaining) * 1000
-                        QTimer.singleShot(
-                            delay_ms,
-                            lambda r=remaining: (
-                                self.generate_report_btn.setText(f"Generate Report ({r})")
-                                if hasattr(self, 'demo_toggle') and self.demo_toggle.isChecked()
-                                else None
-                            ),
-                        )
-
                     def enable_generate_report_button_demo():
-                        if hasattr(self, 'demo_toggle') and self.demo_toggle.isChecked():
+                        if hasattr(self, "demo_toggle") and self.demo_toggle.isChecked():
                             self.generate_report_btn.setEnabled(True)
                             try:
-                                if hasattr(self, 'green_button_style'):
+                                if hasattr(self, "green_button_style"):
                                     self.generate_report_btn.setStyleSheet(self.green_button_style)
                             except Exception:
                                 pass
                             self.generate_report_btn.setText("Generate Report")
+                            print(" Generate Report button enabled after 12 seconds from Demo Toggle")
+                            # Clear countdown timers list after completion
+                            self.countdown_timers.clear()
 
-                    QTimer.singleShot(12000, enable_generate_report_button_demo)
+                    countdown_start = 12
+                    self.generate_report_btn.setText(f"Generate Report ({countdown_start})")
+                    
+                    # Apply green style to ensure consistent font size during countdown
+                    self.generate_report_btn.setStyleSheet(self.green_button_style)
+                    
+                    # Clear any existing countdown timers
+                    for timer in self.countdown_timers:
+                        if hasattr(timer, "stop") and timer.isActive():
+                            timer.stop()
+                    self.countdown_timers.clear()
+                    
+                    # Create and store new countdown timers using QTimer objects
+                    for remaining in range(countdown_start - 1, 0, -1):
+                        delay_ms = (countdown_start - remaining) * 1000
+                        timer = QTimer()
+                        timer.setSingleShot(True)
+                        timer.timeout.connect(lambda r=remaining: self.generate_report_btn.setText(f"Generate Report ({r})"))
+                        timer.start(delay_ms)
+                        self.countdown_timers.append(timer)
+                    
+                    # Store the final timer reference
+                    final_timer = QTimer()
+                    final_timer.setSingleShot(True)
+                    final_timer.timeout.connect(enable_generate_report_button_demo)
+                    final_timer.start(12000)
+                    self.countdown_timers.append(final_timer)
+                    
                 except Exception:
                     self.generate_report_btn.setEnabled(True)
                     try:
-                        if hasattr(self, 'green_button_style'):
+                        if hasattr(self, "green_button_style"):
                             self.generate_report_btn.setStyleSheet(self.green_button_style)
                     except Exception:
                         pass
             else:
-                timer = getattr(self, 'timer', None)
+                # Demo mode OFF - Permanently disable button and cancel timers
+                # Cancel any active countdown timers
+                for timer in self.countdown_timers:
+                    if hasattr(timer, "stop") and timer.isActive():
+                        timer.stop()
+                self.countdown_timers.clear()
+                
+                # Permanently disable generate report button when demo is off
+                self.generate_report_btn.setEnabled(False)
+                self.generate_report_btn.setText("Generate Report")
+                # Apply disabled style
+                self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 16px; font-weight: bold;")
+                
+                timer = getattr(self, "timer", None)
                 if timer is None or not timer.isActive():
-                    self.generate_report_btn.setEnabled(False)
-        self.update_recording_button_state()
+                    self.update_recording_button_state()
 
     def apply_language(self, language=None):
         if language:
@@ -5768,13 +5798,31 @@ class ECGTestPage(QWidget):
 
         countdown_start = 12
         self.generate_report_btn.setText(f"Generate Report ({countdown_start})")
+        
+        # Apply green style to ensure consistent font size during countdown
+        self.generate_report_btn.setStyleSheet(green_style)
+        
+        # Clear any existing countdown timers
+        for timer in self.countdown_timers:
+            if hasattr(timer, 'stop') and timer.isActive():
+                timer.stop()
+        self.countdown_timers.clear()
+        
+        # Create and store new countdown timers using QTimer objects
         for remaining in range(countdown_start - 1, 0, -1):
             delay_ms = (countdown_start - remaining) * 1000
-            QTimer.singleShot(
-                delay_ms,
-                lambda r=remaining: self.generate_report_btn.setText(f"Generate Report ({r})")
-            )
-        QTimer.singleShot(12000, enable_generate_report_button)
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda r=remaining: self.generate_report_btn.setText(f"Generate Report ({r})"))
+            timer.start(delay_ms)
+            self.countdown_timers.append(timer)
+        
+        # Store the final timer reference
+        final_timer = QTimer()
+        final_timer.setSingleShot(True)
+        final_timer.timeout.connect(enable_generate_report_button)
+        final_timer.start(12000)
+        self.countdown_timers.append(final_timer)
 
 
     # ---------------------- Stop Button Functionality ----------------------
@@ -5792,6 +5840,17 @@ class ECGTestPage(QWidget):
             # self.serial_reader.close()
             # self.serial_reader = None
         self.timer.stop()
+        # Cancel any active countdown timers for generate report button
+        for timer in self.countdown_timers:
+            if hasattr(timer, "stop") and timer.isActive():
+                timer.stop()
+        self.countdown_timers.clear()
+        # Reset generate report button to initial state
+        if hasattr(self, "generate_report_btn"):
+            self.generate_report_btn.setEnabled(False)
+            self.generate_report_btn.setText("Generate Report")
+            # Apply disabled style
+            self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 16px; font-weight: bold;")
         if hasattr(self, '_12to1_timer'):
             self._12to1_timer.stop()
 
@@ -5864,6 +5923,28 @@ class ECGTestPage(QWidget):
                 print(" Demo mode enabled (Hardware acquisition stopped)")
         except Exception as e:
             print(f" Error enabling demo mode: {e}")
+
+        # Cancel and clear all countdown timers
+        for timer in self.countdown_timers:
+            if hasattr(timer, 'stop') and timer.isActive():
+                timer.stop()
+        self.countdown_timers.clear()
+        
+        # Reset generate report button to disabled state
+        self.generate_report_btn.setEnabled(False)
+        self.generate_report_btn.setStyleSheet("""
+            QPushButton {
+                background: #e0e0e0;
+                color: #a0a0a0;
+                border: 2px solid #cccccc;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 10px;
+                font-weight: bold;
+                text-align: center;
+            }
+        """)
+        self.generate_report_btn.setText("Generate Report")
 
         # Disable Stop button
         self.stop_btn.setEnabled(False)

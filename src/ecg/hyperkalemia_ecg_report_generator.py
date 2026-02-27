@@ -26,6 +26,7 @@ ECG_SMALL_BOX_MM_HEIGHT = ECG_LARGE_BOX_MM_HEIGHT / 5.0
 ECG_SMALL_BOX_MM_WIDTH = ECG_LARGE_BOX_MM_WIDTH / 5.0
 ECG_BASE_BOX_MM = 5.0
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM_HEIGHT / ECG_BASE_BOX_MM
+ECG_BASELINE_ADC = 2000.0
 
 def beats_in_boxes(bpm, boxes, mm_per_box=ECG_LARGE_BOX_MM_WIDTH, speed_mm_per_s=25.0):
     if bpm <= 0 or boxes <= 0:
@@ -648,8 +649,8 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         # Convert to numpy array
         adc_data = np.array(ecg_data, dtype=float)
         
-        # Apply baseline 2000 (subtract baseline from ADC values)
-        baseline_adc = 2000.0
+        # Apply baseline (subtract baseline from ADC values)
+        baseline_adc = ECG_BASELINE_ADC
         centered_adc = adc_data - baseline_adc
         
         # Calculate ADC per box based on wave_gain and lead-specific multiplier
@@ -1561,7 +1562,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                         
                         # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                         # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
+                        baseline_adc = ECG_BASELINE_ADC
                         lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
                         lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
                         
@@ -1637,7 +1638,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                             
                             # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                             # This ensures calculated leads are centered around 0, not around baseline
-                            baseline_adc = 2000.0
+                            baseline_adc = ECG_BASELINE_ADC
                             lead_i_centered = np.array(lead_i_slice, dtype=float) - baseline_adc
                             lead_ii_centered = np.array(lead_ii_slice, dtype=float) - baseline_adc
                             
@@ -1723,14 +1724,14 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
             
             if real_data_available and len(real_ecg_data) > 0:
                 # Draw ALL REAL ECG data - NO LIMITS
-                from reportlab.lib.units import mm as mm_unit
                 box_width_points = ECG_LARGE_BOX_MM_WIDTH * mm_unit
                 width_boxes = 54.0 if lead == "II" else 27.0
                 ecg_width = width_boxes * box_width_points
                 ecg_height = 45
                 
-                # Create time array for ALL data
-                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
+                # Create time array for ALL data with 1mm gap after calibration notch for specific leads
+                gap = mm_unit if lead in ["V1", "V2", "V3", "II"] else 0
+                t = np.linspace(x_pos + gap, x_pos + ecg_width, len(real_ecg_data))
                 
                 
                 
@@ -1757,13 +1758,13 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                 data_mean = np.mean(adc_data)
                 data_std = np.std(adc_data)
                 
-                # Step 2: Apply baseline 2000 (subtract baseline from ADC values)
+                # Step 2: Apply baseline (subtract baseline from ADC values)
                 # IMPORTANT: For calculated leads (III, aVR, aVL, aVF), data is already calculated from processed I and II
                 # So it's already centered (mean ~0), but we still need to scale it properly
-                baseline_adc = 2000.0
+                baseline_adc = ECG_BASELINE_ADC
                 is_calculated_lead = lead in ["III", "aVR", "aVL", "aVF", "-aVR"]
                 
-                if abs(data_mean - 2000.0) < 500:  # Data is close to baseline 2000 (raw ADC)
+                if abs(data_mean - ECG_BASELINE_ADC) < 500:  # Data is close to baseline 2000 (raw ADC)
                     centered_adc = adc_data - baseline_adc
                 elif is_calculated_lead:
                     # For calculated leads, data is already centered from calculation (II - I, etc.)
@@ -1991,7 +1992,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                         
                         # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                         # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
+                        baseline_adc = ECG_BASELINE_ADC
                         lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
                         lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
                         
@@ -2066,7 +2067,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                             
                             # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
                             # This ensures calculated leads are centered around 0, not around baseline
-                            baseline_adc = 2000.0
+                            baseline_adc = ECG_BASELINE_ADC
                             lead_i_centered = np.array(lead_i_slice, dtype=float) - baseline_adc
                             lead_ii_centered = np.array(lead_ii_slice, dtype=float) - baseline_adc
                             
@@ -2152,8 +2153,9 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                 ecg_width = 460
                 ecg_height = 45
                 
-                # Create time array for ALL data
-                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
+                # Create time array for ALL data with 1mm gap after calibration notch for specific leads
+                gap = mm_unit if lead in ["V1", "V2", "V3", "II"] else 0
+                t = np.linspace(x_pos + gap, x_pos + ecg_width, len(real_ecg_data))
                 
                 
                 # Step 1: Convert ADC data to numpy array
@@ -2179,12 +2181,12 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
                 data_std = np.std(adc_data)
                 is_calculated_lead = lead in ["III", "aVR", "aVL", "aVF", "-aVR"]
                 
-                # Step 2: Apply baseline 2000 (subtract baseline from ADC values)
+                # Step 2: Apply baseline (subtract baseline from ADC values)
                 # IMPORTANT: For calculated leads, data is already calculated from processed I and II
                 # So it's already centered (mean ~0), but we still need to scale it properly
-                baseline_adc = 2000.0
+                baseline_adc = ECG_BASELINE_ADC
                 
-                if abs(data_mean - 2000.0) < 500:  # Data is close to baseline 2000 (raw ADC)
+                if abs(data_mean - ECG_BASELINE_ADC) < 500:  # Data is close to baseline 2000 (raw ADC)
                     centered_adc = adc_data - baseline_adc
                 elif is_calculated_lead:
                     # For calculated leads, data is already centered from calculation (II - I, etc.)
@@ -3556,10 +3558,10 @@ def generate_hyperkalemia_ecg_report(filename="hyperkalemia_ecg_report.pdf", lea
         except Exception as filter_err:
             print(f" Report filter apply failed for {lead_name}: {filter_err}")
                 
-        # Apply baseline 2000
-        baseline_adc = 2000.0
+        # Apply baseline
+        baseline_adc = ECG_BASELINE_ADC
         data_mean = np.mean(adc_data)
-        if abs(data_mean - 2000.0) < 500:
+        if abs(data_mean - ECG_BASELINE_ADC) < 500:
             centered_adc = adc_data - baseline_adc
         else:
             centered_adc = adc_data
@@ -3581,7 +3583,8 @@ def generate_hyperkalemia_ecg_report(filename="hyperkalemia_ecg_report.pdf", lea
         ecg_width = (54.0 if lead_name == "II" else 27.0) * box_width_points
         if ecg_width <= 0:
             return None
-        t = np.linspace(x_pos, x_pos + ecg_width, len(adc_data))
+        gap = mm_unit if lead_name in ["V1", "V2", "V3", "II"] else 0
+        t = np.linspace(x_pos + gap, x_pos + ecg_width, len(adc_data))
         
         # Draw ECG waveform
         ecg_path = Path(fillColor=None, 

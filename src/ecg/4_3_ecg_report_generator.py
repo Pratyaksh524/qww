@@ -23,7 +23,7 @@ ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0
 # Scale wave speed so 1 second equals 5 large boxes at 25 mm/s on 40-box grid
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
 FOUR_THREE_SAMPLES_COLUMN = 2000
-FOUR_THREE_SAMPLES_EXTRA_II = 3500
+FOUR_THREE_SAMPLES_EXTRA_II = 5500
 
 # Set matplotlib to use non-interactive backend
 matplotlib.use('Agg')
@@ -1833,10 +1833,14 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             
             if real_data_available and len(real_ecg_data) > 0:
                 # Calculate ECG width based on column position to stop at dotted lines
-                # Special case: Additional Lead II at V4 position (y=90) gets extended width of 600 points
+                # Special case: Additional Lead II at V4 position (y=90) gets extended width using exact 52-box calculation
                 if lead == "II" and y_pos == 90:
-                    # Additional Lead II at V4 position: EXTENDED to 600 points
-                    ecg_width = 600
+                    # Calculate exact width for 52 boxes to ensure proper R-R intervals
+                    from reportlab.lib.units import mm as _mm_units
+                    # 52 boxes × ECG_LARGE_BOX_MM × mm = exact width in points
+                    exact_52_box_width = 52 * ECG_LARGE_BOX_MM * mm
+                    ecg_width = exact_52_box_width
+                    print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
                 elif x_pos == 0:
                     # First column: stop at x=274 (dotted line)
                     ecg_width = 274
@@ -1850,8 +1854,22 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 ecg_height = 45
                 
                 # Create time array for ALL data
-                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
-                
+                # Special case: Extra Lead II needs proper time scaling for correct R-R intervals
+                if lead == "II" and y_pos == 90:
+                    # Use same time scaling as regular leads but with extended width
+                    # Calculate proper x position for Extra Lead II
+                    extra_lead_ii_x_pos_calc = 20 - 45
+                    extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
+                    # Create time array using same method as regular leads
+                    t = np.linspace(extra_lead_ii_adjusted_x_pos_calc, extra_lead_ii_adjusted_x_pos_calc + ecg_width, len(real_ecg_data))
+                    print(f" Extra Lead II: Time array from {extra_lead_ii_adjusted_x_pos_calc:.1f} to {extra_lead_ii_adjusted_x_pos_calc + ecg_width:.1f} (width: {ecg_width} points)")
+                else:
+                    # IMPORTANT FIX: Use consistent time scaling for all columns
+                    # All columns should use the same effective width (274 points) for time scaling
+                    # This ensures R-R intervals appear consistent across all columns
+                    effective_width_for_time = 274  # Use same width for time scaling in all columns
+                    t = np.linspace(x_pos, x_pos + effective_width_for_time, len(real_ecg_data))
+                    print(f" Lead {lead}: Using consistent time scaling - width: {effective_width_for_time} points (actual drawing width: {ecg_width} points)")
                 
                 
                 adc_data = np.array(real_ecg_data, dtype=float)
@@ -2512,10 +2530,14 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             
             if real_data_available and len(real_ecg_data) > 0:
                 # Calculate ECG width based on column position to stop at dotted lines
-                # Special case: Additional Lead II at V4 position (y=90) gets extended width of 600 points
+                # Special case: Additional Lead II at V4 position (y=90) gets extended width using exact 52-box calculation
                 if lead == "II" and y_pos == 90:
-                    # Additional Lead II at V4 position: EXTENDED to 600 points
-                    ecg_width = 600
+                    # Calculate exact width for 52 boxes to ensure proper R-R intervals
+                    from reportlab.lib.units import mm as _mm_units
+                    # 52 boxes × ECG_LARGE_BOX_MM × mm = exact width in points
+                    exact_52_box_width = 52 * ECG_LARGE_BOX_MM * mm
+                    ecg_width = exact_52_box_width
+                    print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
                 elif x_pos == 0:
                     # First column: stop at x=274 (dotted line)
                     ecg_width = 274
@@ -2529,7 +2551,22 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 ecg_height = 45
                 
                 # Create time array for ALL data
-                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
+                # Special case: Extra Lead II needs proper time scaling for correct R-R intervals
+                if lead == "II" and y_pos == 90:
+                    # Use same time scaling as regular leads but with extended width
+                    # Calculate proper x position for Extra Lead II
+                    extra_lead_ii_x_pos_calc = 20 - 45
+                    extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
+                    # Create time array using same method as regular leads
+                    t = np.linspace(extra_lead_ii_adjusted_x_pos_calc, extra_lead_ii_adjusted_x_pos_calc + ecg_width, len(real_ecg_data))
+                    print(f" Extra Lead II: Time array from {extra_lead_ii_adjusted_x_pos_calc:.1f} to {extra_lead_ii_adjusted_x_pos_calc + ecg_width:.1f} (width: {ecg_width} points)")
+                else:
+                    # IMPORTANT FIX: Use consistent time scaling for all columns
+                    # All columns should use the same effective width (274 points) for time scaling
+                    # This ensures R-R intervals appear consistent across all columns
+                    effective_width_for_time = 274  # Use same width for time scaling in all columns
+                    t = np.linspace(x_pos, x_pos + effective_width_for_time, len(real_ecg_data))
+                    print(f" Lead {lead}: Using consistent time scaling - width: {effective_width_for_time} points (actual drawing width: {ecg_width} points)")
                 
                 
                 # Step 1: Convert ADC data to numpy array
