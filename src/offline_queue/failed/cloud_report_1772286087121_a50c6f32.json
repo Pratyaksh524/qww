@@ -1,0 +1,18 @@
+{
+  "id": "cloud_report_1772286087121_a50c6f32",
+  "type": "cloud_report",
+  "data": {
+    "file_path": "C:\\Users\\DELL\\Downloads\\dfg\\merge\\reports\\ECG_Report_4_3_20260228_175048.pdf",
+    "metadata": {
+      "filename": "ECG_Report_4_3_20260228_175048.pdf",
+      "uploaded_at": "2026-02-28T19:11:27.121858",
+      "file_size": 289510,
+      "file_type": ".pdf"
+    },
+    "cloud_service": "s3"
+  },
+  "priority": 2,
+  "queued_at": "2026-02-28T13:41:27.121858Z",
+  "retry_count": 4,
+  "status": "pending"
+}

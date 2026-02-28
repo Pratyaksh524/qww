@@ -12,8 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 
-# Set matplotlib to use non-interactive backend
-matplotlib.use('Agg')
+# matplotlib.use('Agg') # Removed - isolated FigureCanvasAgg used instead
 
 # ------------------------ ECG grid scale constants ------------------------
 # 40 large boxes across A4 width (210mm) => 1 large box = 5.25mm
@@ -422,7 +421,11 @@ def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
     Returns: matplotlib figure with pink ECG grid background
     """
     # Create figure with pink background
-    fig, ax = plt.subplots(figsize=(width, height), facecolor='#ffe6e6', frameon=True)
+    from matplotlib.figure import Figure as _Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _FCA
+    fig = _Figure(figsize=(width, height), facecolor='#ffe6e6')
+    _FCA(fig)
+    ax = fig.add_subplot(111)
     
     # STEP 1: Create pink ECG grid background
     # ECG grid colors (even lighter pink/red like medical ECG paper)
@@ -843,11 +846,14 @@ def create_clean_ecg_image(lead_name, width=6, height=2):
     """
     # FORCE matplotlib to use proper backend
     import matplotlib
-    matplotlib.use('Agg')
+    # matplotlib.use('Agg') # Safe
     import matplotlib.pyplot as plt
     
     # STEP 1: Create figure with FORCED pink background
-    fig = plt.figure(figsize=(width, height), facecolor='#ffe6e6', frameon=True)
+    from matplotlib.figure import Figure as _Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _FCA
+    fig = _Figure(figsize=(width, height), facecolor='#ffe6e6')
+    _FCA(fig)
     
     # FORCE figure background to pink
     fig.patch.set_facecolor('#ffe6e6')
@@ -1261,7 +1267,7 @@ def generate_ecg_report(
                            facecolor='#ffe6e6',  # PINK background
                            edgecolor='none',
                            format='png')
-                plt.close(fig)
+                del fig
                 
                 lead_images[lead] = img_path
                 print(f" Created NEW PINK GRID image: {img_path}")

@@ -25,8 +25,7 @@ ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
 FOUR_THREE_SAMPLES_COLUMN = 2000
 FOUR_THREE_SAMPLES_EXTRA_II = 5500
 
-# Set matplotlib to use non-interactive backend
-matplotlib.use('Agg')
+# matplotlib.use('Agg') # Removed to prevent main thread Qt canvas corruption
 
 # ------------------------ Resource path helper for PyInstaller compatibility ------------------------
 
@@ -302,7 +301,11 @@ def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
     Returns: matplotlib figure with pink ECG grid background
     """
     # Create figure with pink background
-    fig, ax = plt.subplots(figsize=(width, height), facecolor='#ffe6e6', frameon=True)
+    from matplotlib.figure import Figure as _Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _FCA
+    fig = _Figure(figsize=(width, height), facecolor='#ffe6e6')
+    _FCA(fig)
+    ax = fig.add_subplot(111)
     
     # STEP 1: Create pink ECG grid background
     # ECG grid colors (even lighter pink/red like medical ECG paper)
@@ -724,11 +727,14 @@ def create_clean_ecg_image(lead_name, width=6, height=2):
     """
     # FORCE matplotlib to use proper backend
     import matplotlib
-    matplotlib.use('Agg')
+    # matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     
     # STEP 1: Create figure with FORCED pink background
-    fig = plt.figure(figsize=(width, height), facecolor='#ffe6e6', frameon=True)
+    from matplotlib.figure import Figure as _Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _FCA
+    fig = _Figure(figsize=(width, height), facecolor='#ffe6e6')
+    _FCA(fig)
     
     # FORCE figure background to pink
     fig.patch.set_facecolor('#ffe6e6')
@@ -1318,7 +1324,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                            facecolor='#ffe6e6',  # PINK background
                            edgecolor='none',
                            format='png')
-                plt.close(fig)
+                del fig
                 
                 lead_images[lead] = img_path
                 print(f" Created NEW PINK GRID image: {img_path}")

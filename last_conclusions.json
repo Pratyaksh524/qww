@@ -1,14 +1,17 @@
 {
-  "timestamp": "2026-02-23 13:50:52",
+  "timestamp": "2026-02-28 19:40:38",
   "findings": [
-    "Normal heart rate",
-    "Normal PR interval",
-    "Normal QRS duration",
+    "Bradycardia detected",
+    "Prolonged PR interval",
+    "Borderline QRS duration",
     "Normal QTc interval",
-    "Low HRV"
+    "Good heart rate variability"
   ],
   "recommendations": [
-    "Ensure adequate rest and stress management",
-    "Consider relaxation techniques, adequate sleep, and regular exercise"
+    "May be normal for well-trained athletes or during sleep",
+    "Monitor for symptoms, consult if experiencing fatigue or dizziness",
+    "Medical evaluation recommended for AV conduction assessment",
+    "Monitor for progression to higher-degree blocks",
+    "Monitor for progression, follow-up ECG if symptoms develop"
   ]
 }

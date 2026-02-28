@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import time
 import platform
 import numpy as np
@@ -754,6 +754,23 @@ class ECGTestPage(QWidget):
         # Initialize crash logger
         self.crash_logger = get_crash_logger()
         self.crash_logger.log_info("ECG Test Page initialized", "ECG_TEST_PAGE_START")
+
+        # Pre-warm matplotlib off-screen renderer so the first report generates
+        # instantly without a 200-400ms module-import stall on the report thread.
+        def _prewarm_matplotlib():
+            try:
+                from matplotlib.figure import Figure
+                from matplotlib.backends.backend_agg import FigureCanvasAgg
+                _fig = Figure(figsize=(1, 1))
+                FigureCanvasAgg(_fig)
+                del _fig
+            except Exception:
+                pass
+        import threading as _threading
+        _t = _threading.Thread(target=_prewarm_matplotlib, daemon=True)
+        _t.start()
+
+
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plots)
         self.serial_reader = None
@@ -1618,6 +1635,10 @@ class ECGTestPage(QWidget):
 
         if hasattr(self, 'demo_toggle') and self.demo_toggle.isChecked():
             print(" Demo mode active - skipping live ECG metrics calculation")
+            return
+
+        # BPM FREEZE: Skip recalculation while report is being generated to keep BPM stable
+        if getattr(self, '_report_generating', False):
             return
 
         if len(self.data) < 2:  # Need at least Lead II for analysis
@@ -3977,10 +3998,14 @@ class ECGTestPage(QWidget):
         return metrics_frame
 
     def update_ecg_metrics_on_top_of_lead_graphs(self, intervals):
+        # BPM FREEZE: Don't update heart rate display during report generation
+        if getattr(self, '_report_generating', False):
+            return
         if 'Heart_Rate' in intervals and intervals['Heart_Rate'] is not None:
             # Fixed-width formatting (3 digits) to prevent text shifting
             hr_val = int(round(intervals['Heart_Rate'])) if isinstance(intervals['Heart_Rate'], (int, float)) else int(intervals['Heart_Rate']) if str(intervals['Heart_Rate']).isdigit() else 0
             self.metric_labels['heart_rate'].setText(f"{hr_val:3d}")
+
         
         if 'PR' in intervals and intervals['PR'] is not None:
             # Fixed-width formatting (3 digits) to prevent text shifting
@@ -6212,405 +6237,412 @@ class ECGTestPage(QWidget):
             traceback.print_exc()
 
     def generate_pdf_report(self):
-        """Generate PDF report with format selection dropdown"""
+        """Generate PDF report without blocking the ECG display.
+
+        Strategy:
+          1. Show UI dialogs (format + file picker) on the main thread  – required by Qt.
+          2. Snapshot the ECG data buffers so the background thread works on a
+             stable copy and does NOT touch self.data while the timer is running.
+          3. Dispatch ALL heavy work (matplotlib rendering × 12, PDF generation,
+             file copies, index update) to a QThread so the event-loop / QTimer
+             never miss a tick → waves keep flowing and BPM stays stable.
+        """
         from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
-        import datetime, os, json, shutil
-        
-        # Select report format first
+        from PyQt5.QtCore import QThread, pyqtSignal, QObject
+        import datetime, os, json, shutil, copy
+
+        # ── STEP 1 (main thread): pick format ──────────────────────────────────
         formats = ["12:1 Portrait", "4:3 Landscape", "6:2 Landscape"]
-        format_name, ok = QInputDialog.getItem(self, "Select Format", "Choose ECG Report Format:", formats, 0, False)
+        format_name, ok = QInputDialog.getItem(
+            self, "Select Format", "Choose ECG Report Format:", formats, 0, False)
         if not ok:
             return
-        
-        # Determine selected format
+
         if "4:3" in format_name:
             fmt = "4_3"
         elif "6:2" in format_name:
             fmt = "6_2"
         else:
             fmt = "12_1"
-        
-        # Store format for success message
         self.selected_format = fmt
-        
-        # Capture last 10 seconds of live ECG data
-        lead_img_paths = {}
+
+        # ── STEP 2 (main thread): snapshot live data before file dialog ─────────
+        # Take a deep copy NOW so report always uses the data that was on screen
+        # when the user clicked "Generate Report".
         ordered_leads = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
-        
-        print(" Capturing last 10 seconds of live ECG data...")
-        
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(current_dir, '..'))
-        
-        # Calculate 10 seconds of data based on sampling rate
-        sampling_rate = 250  # Default sampling rate
+        sampling_rate = 250
         if hasattr(self, 'sampler') and hasattr(self.sampler, 'sampling_rate'):
             try:
                 sampling_rate = float(self.sampler.sampling_rate)
-            except:
+            except Exception:
                 sampling_rate = 250
-        
-        data_points_10_sec = int(sampling_rate * 10)  # 10 seconds of data
-        print(f" Capturing {data_points_10_sec} data points at {sampling_rate}Hz")
-        
+        data_points_10_sec = int(sampling_rate * 10)
+
+        # Snapshot: list of numpy arrays, one per lead (copy so thread is safe)
+        import numpy as np
+        data_snapshot = {}
         for i, lead in enumerate(ordered_leads):
-            if i < len(self.data) and i < len(self.leads):
-                try:
-                    # Get the last 10 seconds of data for this lead
-                    lead_data = self.data[i]
-                    if len(lead_data) > data_points_10_sec:
-                        recent_data = lead_data[-data_points_10_sec:]
-                    else:
-                        recent_data = lead_data
+            try:
+                if i < len(self.data) and i < len(self.leads):
+                    raw = self.data[i]
+                    if hasattr(raw, '__len__') and len(raw) > 0:
+                        arr = np.asarray(raw, dtype=float)
+                        if len(arr) > data_points_10_sec:
+                            arr = arr[-data_points_10_sec:]
+                        data_snapshot[lead] = arr.copy()
+            except Exception:
+                pass
 
-                    if len(recent_data) > 0:
-                        # Create a clean plot for the report
-                        import matplotlib.pyplot as plt
-                        import matplotlib
-                        import numpy as np
-                        matplotlib.use('Agg')  # Use non-interactive backend
-                        
-                        fig, ax = plt.subplots(figsize=(8, 2))
-                        
-                        # Plot the 10-second ECG trace
-                        time_axis = np.linspace(0, 10, len(recent_data))  # 10 seconds
-                        ax.plot(time_axis, recent_data, color='black', linewidth=0.7)
-                        
-                        # Clean medical-style formatting
-                        ax.set_xlim(0, 10)
-                        ax.set_xticks([0, 2, 4, 6, 8, 10])
-                        ax.set_xticklabels(['0s', '2s', '4s', '6s', '8s', '10s'])
-                        ax.set_ylabel('Amplitude (mV)')
-                        ax.set_title(f'Lead {lead} - Last 10 seconds', fontsize=10, fontweight='bold')
-                        
-                        # Add subtle grid
-                        ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
-                        ax.set_axisbelow(True)
-                        
-                        # Clean background
-                        ax.set_facecolor('white')
-                        fig.patch.set_facecolor('white')
-                        
-                        # Save the image
-                        img_path = os.path.join(project_root, f"lead_{lead}_10sec.png")
-                        fig.savefig(img_path,
-                                  bbox_inches='tight',
-                                  pad_inches=0.1,
-                                  dpi=150,
-                                  facecolor='white',
-                                  edgecolor='none')
-                        
-                        plt.close(fig)  # Close to free memory
-                        lead_img_paths[lead] = img_path
-                        
-                        print(f"  Captured 10s Lead {lead}: {len(recent_data)} samples")
-                    else:
-                        print(f"  No data available for Lead {lead}")
-                        
-                except Exception as e:
-                    print(f"  Error capturing Lead {lead}: {e}")
-            else:
-                print(f"  Lead {lead} not available (index {i})")
-        
-        # Ask user for destination
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save ECG Report",
-            f"ECG_Report_{fmt.replace(':', '_')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            "PDF Files (*.pdf)"
-        )
-        if not filename:
-            return
+        # Snapshot ECG metrics (already calculated, just read the stored values)
+        frozen_bpm  = getattr(self, 'last_heart_rate',    0)
+        frozen_pr   = getattr(self, 'pr_interval',        0)
+        frozen_qrs  = getattr(self, 'last_qrs_duration',  0)
+        frozen_qt   = getattr(self, 'last_qt_interval',   0)
+        frozen_qtc  = getattr(self, 'last_qtc_interval',  0)
+        frozen_qtcf = getattr(self, 'last_qtcf_interval', 0)
+        frozen_st   = getattr(self, 'last_st_segment',    0.0)
 
-        # Check demo mode status
+        # Demo mode flag (read on main thread)
         is_demo_mode = False
         if hasattr(self, "demo_toggle"):
             try:
                 is_demo_mode = self.demo_toggle.isChecked()
             except Exception:
-                is_demo_mode = False
+                pass
 
+        # ── STEP 3 (main thread): ask where to save ─────────────────────────────
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save ECG Report",
+            f"ECG_Report_{fmt}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            "PDF Files (*.pdf)"
+        )
+        if not filename:
+            return   # user cancelled — nothing started, nothing to clean up
+
+        # ── Capture lightweight refs needed by thread ─────────────────────────
+        # IMPORTANT: do NO file I/O here — every ms on the main thread means a
+        # missed ECG timer tick and visible jitter.  All I/O is inside the worker.
+        file_base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+        # Resolve username now (pure attribute walk, no I/O)
+        username = ""
         try:
-            import re
-            ecg_data = {"HR": 0, "beat": 0, "PR": 0, "QRS": 0, "QT": 0, "QTc": 0, "ST": 0, "HR_max": 0, "HR_min": 0, "HR_avg": 0}
-            
-            # Try to mirror dashboard metrics so both reports match
-            dashboard_ref = None
-            try:
-                widget = self
-                for _ in range(12):
-                    if widget is None:
-                        break
-                    if hasattr(widget, 'metric_labels') and isinstance(getattr(widget, 'metric_labels'), dict):
-                        dashboard_ref = widget
-                        break
-                    widget = widget.parent()
-            except Exception:
-                dashboard_ref = None
-
-            def _num_from_label(lbl_text: str, default_val: int) -> int:
-                if not isinstance(lbl_text, str):
-                    return default_val
-                m = re.search(r"-?\d+", lbl_text)
-                return int(m.group(0)) if m else default_val
-
-            if dashboard_ref and hasattr(dashboard_ref, 'metric_labels'):
-                # Try to use last calculated clinical values for better accuracy in reports
-                hr = getattr(self, 'last_heart_rate', 0)
-                pr = getattr(self, 'pr_interval', 0)
-                qrs = getattr(self, 'last_qrs_duration', 0)
-                qt = getattr(self, 'last_qt_interval', 0)
-                qtc = getattr(self, 'last_qtc_interval', 0)
-                qtcf = getattr(self, 'last_qtcf_interval', 0)
-                st = getattr(self, 'last_st_segment', 0.0)
-                
-                # If clinical values not available, try to extract from UI labels
-                if hr == 0:
-                    ml = dashboard_ref.metric_labels
-                    try:
-                        hr = _num_from_label(ml.get('heart_rate', QLabel('')).text() if ml.get('heart_rate') else '', 0)
-                    except Exception: hr = 0
-                    try:
-                        pr = _num_from_label(ml.get('pr_interval', QLabel('')).text() if ml.get('pr_interval') else '', 0)
-                    except Exception: pr = 0
-                    try:
-                        qrs = _num_from_label(ml.get('qrs_duration', QLabel('')).text() if ml.get('qrs_duration') else '', 0)
-                    except Exception: qrs = 0
-                    try:
-                        qtc_text = ml.get('qtc_interval', QLabel('')).text() if ml.get('qtc_interval') else ''
-                        qtc = _num_from_label(qtc_text.split('/')[1] if '/' in qtc_text else qtc_text, 0)
-                    except Exception: qtc = 0
-                    try:
-                        st = _num_from_label(ml.get('st_interval', QLabel('')).text() if ml.get('st_interval') else '', 0)
-                    except Exception: st = 0
-
-                ecg_data.update({
-                    "beat": hr,
-                    "HR_avg": hr,
-                    "PR": pr,
-                    "QRS": qrs,
-                    "QT": qt if qt > 0 else (0 if qtc == 0 else int(max(0, qtc - 20))),
-                    "QTc": qtc,
-                    "QTc_Fridericia": qtcf,
-                    "ST": st,
-                })
-
-            # Load patient details from centralized all_patients.json database
-            patient = None
-            try:
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-                patients_db_file = os.path.join(base_dir, "all_patients.json")
-                
-                if os.path.exists(patients_db_file):
-                    with open(patients_db_file, "r") as jf:
-                        all_patients = json.load(jf)
-                        if all_patients.get("patients") and len(all_patients["patients"]) > 0:
-                            # Get the last patient (most recent)
-                            patient = all_patients["patients"][-1]
-            except Exception as e:
-                print(f" Error loading patient data: {e}")
-                patient = None
-
-            # Always stamp current date/time
-            import datetime as _dt
-            now_str = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if not patient:
-                patient = {}
-            patient["date_time"] = now_str
-
-            # DEMO MODE: For all formats, use dedicated demo report generator (dummycsv.csv)
-            if is_demo_mode:
-                try:
-                    from ecg.demo_ecg_report_generator import generate_demo_ecg_report
-                    fmt_label_map = {"12_1": "12:1", "4_3": "4:3", "6_2": "6:2"}
-                    fmt_label = fmt_label_map.get(fmt, fmt)
-                    print(f" DEMO MODE: Using generate_demo_ecg_report from ECGTestPage ({fmt})")
-                    generate_demo_ecg_report(
-                        filename,
-                        lead_img_paths,
-                        None,
-                        self,
-                        fmt,
-                    )
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        f" Demo ECG Report generated successfully ({fmt_label})!\n Saved as: {filename}\n Demo graphs: {len(lead_img_paths)}/12",
-                    )
-                    return
-                except Exception as e:
-                    print(f" Failed to generate demo PDF from ECGTestPage for fmt={fmt}: {e}")
-                    # Fall through to normal generators if demo-specific fails
-
-            # Load appropriate report generator based on format
-            if fmt == "4_3":
-                # Use 4:3 specific report generator
-                import importlib.util
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                module_file = os.path.join(current_dir, "4_3_ecg_report_generator.py")
-                
-                if os.path.exists(module_file):
-                    spec = importlib.util.spec_from_file_location("ecg_4_3_generator", module_file)
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    
-                    # Find the generate function
-                    gen = None
-                    for name in ("generate_4_3_ecg_report", "generate_ecg_report"):
-                        if hasattr(mod, name):
-                            gen = getattr(mod, name)
-                            break
-                    
-                    if gen:
-                        gen(filename, ecg_data, lead_img_paths, None, self, patient)
-                    else:
-                        raise RuntimeError("No generate function found in 4_3_ecg_report_generator.py")
-                else:
-                    raise FileNotFoundError("4_3_ecg_report_generator.py not found")
-                    
-            elif fmt == "6_2":
-                # Use 6:2 specific report generator
-                import importlib.util
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                module_file = os.path.join(current_dir, "6_2_ecg_report_generator.py")
-                
-                if os.path.exists(module_file):
-                    spec = importlib.util.spec_from_file_location("ecg_6_2_generator", module_file)
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    
-                    # Find the generate function
-                    gen = None
-                    for name in ("generate_6_2_ecg_report", "generate_ecg_report"):
-                        if hasattr(mod, name):
-                            gen = getattr(mod, name)
-                            break
-                    
-                    if gen:
-                        gen(filename, ecg_data, lead_img_paths, None, self, patient)
-                    else:
-                        raise RuntimeError("No generate function found in 6_2_ecg_report_generator.py")
-                else:
-                    raise FileNotFoundError("6_2_ecg_report_generator.py not found")
-                    
+            if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
+                username = getattr(self.dashboard_instance, 'username', '') or ""
             else:
-                # Use standard 12:1 report generator
-                from ecg.ecg_report_generator import generate_ecg_report
-                generate_ecg_report(filename, ecg_data, lead_img_paths, None, self, patient)
-
-            # Append history
-            try:
-                from dashboard.history_window import append_history_entry
-                append_history_entry(patient, filename, report_type=f"{fmt} Lead")
-            except Exception:
-                import traceback
-                traceback.print_exc()
-
-            # Show format-specific success message
-            if hasattr(self, 'selected_format') and self.selected_format == "4_3":
-                QMessageBox.information(self, "Success", f"4:3 ECG detection report saved successfully:\n{filename}")
-            elif hasattr(self, 'selected_format') and self.selected_format == "6_2":
-                QMessageBox.information(self, "Success", f"6:2 ECG detection report saved successfully:\n{filename}")
-            else:
-                QMessageBox.information(self, "Success", f"ECG Report generated successfully:\n{filename}")
-
-            # Dual-save to app reports/ and update index.json
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-            reports_dir = os.path.abspath(os.path.join(base_dir, '..', 'reports'))
-            os.makedirs(reports_dir, exist_ok=True)
-            dst_basename = os.path.basename(filename)
-            dst_path = os.path.join(reports_dir, dst_basename)
-            if os.path.abspath(filename) != os.path.abspath(dst_path):
-                counter = 1
-                name, ext = os.path.splitext(dst_basename)
-                while os.path.exists(dst_path):
-                    dst_basename = f"{name}_{counter}{ext}"
-                    dst_path = os.path.join(reports_dir, dst_basename)
-                    counter += 1
-                shutil.copyfile(filename, dst_path)
-            
-            # Also save to Downloads folder
-            try:
-                import pathlib
-                downloads_path = pathlib.Path.home() / "Downloads"
-                if downloads_path.exists():
-                    # Use the original filename basename (before any counter modifications)
-                    original_basename = os.path.basename(filename)
-                    downloads_report_path = downloads_path / original_basename
-                    # Handle duplicates in Downloads folder
-                    counter = 1
-                    name, ext = os.path.splitext(original_basename)
-                    while downloads_report_path.exists():
-                        downloads_report_path = downloads_path / f"{name}_{counter}{ext}"
-                        counter += 1
-                    shutil.copyfile(filename, str(downloads_report_path))
-                    print(f" Report also saved to Downloads: {downloads_report_path}")
-            except Exception as e:
-                print(f" Could not save to Downloads folder: {e}")
-            index_path = os.path.join(reports_dir, 'index.json')
-            items = []
-            if os.path.exists(index_path):
-                try:
-                    with open(index_path, 'r') as f:
-                        items = json.load(f)
-                except Exception:
-                    items = []
-            now = datetime.datetime.now()
-            # Include patient name in recent reports entry
-            full_name = ""
-            try:
-                fn = patient.get("first_name", "") if isinstance(patient, dict) else ""
-                ln = patient.get("last_name", "") if isinstance(patient, dict) else ""
-                full_name = (fn + " " + ln).strip()
-            except Exception:
-                full_name = ""
-
-            # Get username from dashboard if available
+                w = self
+                for _ in range(10):
+                    if w is None:
+                        break
+                    if hasattr(w, 'username'):
+                        username = w.username or ""
+                        break
+                    w = w.parent()
+        except Exception:
             username = ""
-            try:
-                if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
-                    username = getattr(self.dashboard_instance, 'username', '') or ""
-                elif hasattr(self, 'dashboard_callback'):
-                    # Try to get username from parent widget
-                    widget = self
-                    for _ in range(10):  # prevent infinite loops
-                        if widget is None:
-                            break
-                        if hasattr(widget, 'username'):
-                            username = widget.username or ""
-                            break
-                        widget = widget.parent()
-            except Exception:
-                username = ""
 
-            meta = {
-                'filename': os.path.basename(dst_path),
-                'title': 'ECG Report',
-                'patient': full_name,
-                'date': now.strftime('%Y-%m-%d'),
-                'time': now.strftime('%H:%M:%S'),
-                'username': username  # Add username to track report ownership
-            }
-            items = [meta] + items
-            items = items[:10]
-            with open(index_path, 'w') as f:
-                json.dump(items, f, indent=2)
+        # Build a Mock ECG Page Ref. Do NOT pass 'self' (a live QWidget) to the background thread.
+        # Report generator scripts try to access GUI methods (like .isChecked(), .parent()) which
+        # throws Qt thread-safety exceptions and stalls the main graphical loop. This mock captures
+        # everything statically ON THE MAIN THREAD before the worker starts.
+        class MockSampler:
+            def __init__(self, sr): self.sampling_rate = sr
+        class MockDemoToggle:
+            def __init__(self, is_demo): self.is_demo = is_demo
+            def isChecked(self): return self.is_demo
+        class MockDemoManager:
+            def __init__(self, tw, sps):
+                self.time_window = tw
+                self.samples_per_second = sps
+        class MockDashboard:
+            def __init__(self, usr): self.username = usr
 
-            # Try refreshing dashboard recent reports if available
+        class MockECGPageRef:
+            def __init__(self, page, data_snap, usr):
+                std_names = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+                self.data = [data_snap.get(l, []) for l in std_names]
+                self.ecg_buffers = []
+                self.ptrs = []
+
+                sr = getattr(page.sampler, 'sampling_rate', 500) if hasattr(page, 'sampler') else 500
+                self.sampler = MockSampler(sr)
+
+                is_demo = page.demo_toggle.isChecked() if hasattr(page, 'demo_toggle') else False
+                self.demo_toggle = MockDemoToggle(is_demo)
+
+                if hasattr(page, 'demo_manager') and page.demo_manager:
+                    tw = getattr(page.demo_manager, 'time_window', None)
+                    sps = getattr(page.demo_manager, 'samples_per_second', 150)
+                    self.demo_manager = MockDemoManager(tw, sps)
+                else:
+                    self.demo_manager = None
+                
+                self.dashboard_instance = MockDashboard(usr)
+
+                self._p_axis = page.calculate_p_axis_from_median() if hasattr(page, 'calculate_p_axis_from_median') else "--"
+                self._qrs_axis = page.calculate_qrs_axis_from_median() if hasattr(page, 'calculate_qrs_axis_from_median') else "--"
+                self._t_axis = page.calculate_t_axis_from_median() if hasattr(page, 'calculate_t_axis_from_median') else "--"
+                try:
+                    self._rv5, self._sv1 = page.get_rv5_sv1_from_median() if hasattr(page, 'get_rv5_sv1_from_median') else (None, None)
+                except Exception:
+                    self._rv5, self._sv1 = (None, None)
+
+            def calculate_p_axis_from_median(self): return self._p_axis
+            def calculate_qrs_axis_from_median(self): return self._qrs_axis
+            def calculate_t_axis_from_median(self): return self._t_axis
+            def get_rv5_sv1_from_median(self): return self._rv5, self._sv1
+            def parent(self): return None
+
+        ecg_page_ref = MockECGPageRef(self, data_snapshot, username)
+
+        # ── STEP 4: worker — ALL heavy work here, zero UI calls ───────────────
+        class ReportWorker(QObject):
+            finished  = pyqtSignal(str)          # success message
+            error     = pyqtSignal(str)           # error message
+            ui_refresh = pyqtSignal()             # ask main thread to refresh panels
+
+            def __init__(self):
+                super().__init__()
+
+            def run(self):
+                try:
+                    from matplotlib.figure import Figure
+                    from matplotlib.backends.backend_agg import FigureCanvasAgg
+                    import numpy as _np
+                    import os, importlib.util, shutil, json, datetime as _dt
+
+                    # ── Load patient data (I/O safe in thread) ─────────────────
+                    patient = {}
+                    try:
+                        base_dir = os.path.abspath(os.path.join(file_base_dir, ".."))
+                        patients_db = os.path.join(base_dir, "all_patients.json")
+                        if os.path.exists(patients_db):
+                            with open(patients_db, "r") as jf:
+                                all_p = json.load(jf)
+                                if all_p.get("patients"):
+                                    patient = dict(all_p["patients"][-1])
+                    except Exception:
+                        patient = {}
+                    patient["date_time"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    # ── Render lead images (isolated per-Figure, no global state) ─
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    project_root = os.path.abspath(os.path.join(current_dir, '..'))
+                    lead_img_paths = {}
+
+                    for lead, arr in data_snapshot.items():
+                        if arr is None or len(arr) == 0:
+                            continue
+                        try:
+                            fig = Figure(figsize=(8, 2), facecolor='white')
+                            FigureCanvasAgg(fig)
+                            ax = fig.add_subplot(111)
+                            time_axis = _np.linspace(0, 10, len(arr))
+                            ax.plot(time_axis, arr, color='black', linewidth=0.7)
+                            ax.set_xlim(0, 10)
+                            ax.set_xticks([0, 2, 4, 6, 8, 10])
+                            ax.set_xticklabels(['0s', '2s', '4s', '6s', '8s', '10s'])
+                            ax.set_ylabel('Amplitude (mV)')
+                            ax.set_title(f'Lead {lead} - Last 10 seconds',
+                                         fontsize=10, fontweight='bold')
+                            ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+                            ax.set_axisbelow(True)
+                            ax.set_facecolor('white')
+                            img_path = os.path.join(project_root, f"lead_{lead}_10sec.png")
+                            fig.savefig(img_path, bbox_inches='tight', pad_inches=0.1,
+                                        dpi=150, facecolor='white', edgecolor='none')
+                            del fig
+                            lead_img_paths[lead] = img_path
+                        except Exception as img_err:
+                            print(f"  Error rendering lead {lead}: {img_err}")
+
+                    # ── Build ECG data dict from frozen metrics ─────────────────
+                    ecg_data = {
+                        "HR": int(frozen_bpm), "beat": int(frozen_bpm),
+                        "HR_avg": int(frozen_bpm), "HR_max": int(frozen_bpm), "HR_min": int(frozen_bpm),
+                        "PR": int(frozen_pr),
+                        "QRS": int(frozen_qrs),
+                        "QT": int(frozen_qt) if frozen_qt > 0 else max(0, int(frozen_qtc) - 20),
+                        "QTc": int(frozen_qtc),
+                        "QTc_Fridericia": int(frozen_qtcf),
+                        "ST": float(frozen_st),
+                    }
+
+                    # ── Call the appropriate report generator ───────────────────
+                    if is_demo_mode:
+                        try:
+                            from ecg.demo_ecg_report_generator import generate_demo_ecg_report
+                            generate_demo_ecg_report(filename, lead_img_paths, None,
+                                                     ecg_page_ref, fmt)
+                            fmt_label = {"12_1": "12:1", "4_3": "4:3", "6_2": "6:2"}.get(fmt, fmt)
+                            # Fall through to dual-save / index update below
+                        except Exception as demo_err:
+                            print(f"Demo report failed, falling through: {demo_err}")
+                            is_demo_fallthrough = True
+                        else:
+                            is_demo_fallthrough = False
+                    else:
+                        is_demo_fallthrough = True
+
+                    if is_demo_fallthrough or not is_demo_mode:
+                        if fmt == "4_3":
+                            module_file = os.path.join(current_dir, "4_3_ecg_report_generator.py")
+                            if not os.path.exists(module_file):
+                                raise FileNotFoundError("4_3_ecg_report_generator.py not found")
+                            spec = importlib.util.spec_from_file_location("ecg_4_3_generator", module_file)
+                            mod  = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(mod)
+                            gen = getattr(mod, "generate_4_3_ecg_report",
+                                  getattr(mod, "generate_ecg_report", None))
+                            if not gen:
+                                raise RuntimeError("No generate function in 4_3_ecg_report_generator.py")
+                            gen(filename, ecg_data, lead_img_paths, None, ecg_page_ref, patient)
+                        elif fmt == "6_2":
+                            module_file = os.path.join(current_dir, "6_2_ecg_report_generator.py")
+                            if not os.path.exists(module_file):
+                                raise FileNotFoundError("6_2_ecg_report_generator.py not found")
+                            spec = importlib.util.spec_from_file_location("ecg_6_2_generator", module_file)
+                            mod  = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(mod)
+                            gen = getattr(mod, "generate_6_2_ecg_report",
+                                  getattr(mod, "generate_ecg_report", None))
+                            if not gen:
+                                raise RuntimeError("No generate function in 6_2_ecg_report_generator.py")
+                            gen(filename, ecg_data, lead_img_paths, None, ecg_page_ref, patient)
+                        else:
+                            from ecg.ecg_report_generator import generate_ecg_report
+                            generate_ecg_report(filename, ecg_data, lead_img_paths, None,
+                                                ecg_page_ref, patient)
+
+                    # ── Dual-save to reports/ dir (all I/O in thread) ───────────
+                    base_dir  = os.path.abspath(os.path.join(current_dir, '..'))
+                    rpt_dir   = os.path.abspath(os.path.join(base_dir, '..', 'reports'))
+                    os.makedirs(rpt_dir, exist_ok=True)
+                    dst_base  = os.path.basename(filename)
+                    dst_path  = os.path.join(rpt_dir, dst_base)
+                    if os.path.abspath(filename) != os.path.abspath(dst_path):
+                        counter = 1
+                        nm, ext = os.path.splitext(dst_base)
+                        while os.path.exists(dst_path):
+                            dst_path = os.path.join(rpt_dir, f"{nm}_{counter}{ext}")
+                            counter += 1
+                        shutil.copyfile(filename, dst_path)
+                    else:
+                        dst_path = filename
+
+                    # ── Save to Downloads (in thread) ───────────────────────────
+                    try:
+                        import pathlib
+                        dl = pathlib.Path.home() / "Downloads"
+                        if dl.exists():
+                            ob = os.path.basename(filename)
+                            dp = dl / ob
+                            counter = 1
+                            nm, ext = os.path.splitext(ob)
+                            while dp.exists():
+                                dp = dl / f"{nm}_{counter}{ext}"
+                                counter += 1
+                            shutil.copyfile(filename, str(dp))
+                    except Exception:
+                        pass
+
+                    # ── Append history entry (in thread) ────────────────────────
+                    try:
+                        from dashboard.history_window import append_history_entry
+                        append_history_entry(patient, dst_path, report_type=f"{fmt} Lead")
+                    except Exception:
+                        pass
+
+                    # ── Update index.json (in thread) ───────────────────────────
+                    try:
+                        idx_path = os.path.join(rpt_dir, 'index.json')
+                        items = []
+                        if os.path.exists(idx_path):
+                            try:
+                                with open(idx_path, 'r') as f:
+                                    items = json.load(f)
+                            except Exception:
+                                items = []
+                        fn = patient.get("first_name", "") if isinstance(patient, dict) else ""
+                        ln = patient.get("last_name",  "") if isinstance(patient, dict) else ""
+                        now = _dt.datetime.now()
+                        meta = {
+                            'filename': os.path.basename(dst_path),
+                            'title': 'ECG Report',
+                            'patient': (fn + " " + ln).strip(),
+                            'date': now.strftime('%Y-%m-%d'),
+                            'time': now.strftime('%H:%M:%S'),
+                            'username': username,
+                        }
+                        items = [meta] + items
+                        items = items[:10]
+                        with open(idx_path, 'w') as f:
+                            json.dump(items, f, indent=2)
+                    except Exception:
+                        pass
+
+                    fmt_labels = {"12_1": "12:1", "4_3": "4:3", "6_2": "6:2"}
+                    self.finished.emit(
+                        f"{fmt_labels.get(fmt, fmt)} ECG Report saved:\n{filename}"
+                    )
+                    self.ui_refresh.emit()
+
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        # ── STEP 5: wire up worker + thread, start ────────────────────────────
+        thread = QThread(self)
+        worker = ReportWorker()
+        worker.moveToThread(thread)
+
+        # Keep references alive until thread finishes
+        self._report_thread = thread
+        self._report_worker = worker
+
+        def on_finished(msg):
+            QMessageBox.information(self, "Report Saved", msg)
+            _cleanup()
+
+        def on_error(msg):
+            QMessageBox.critical(self, "Report Error", f"Failed to generate PDF:\n{msg}")
+            _cleanup()
+
+        def on_ui_refresh():
+            # Only UI work here — lightweight panel refresh on main thread
             try:
-                widget = self
-                for _ in range(10):  # prevent infinite loops
-                    if widget is None:
+                w = self
+                for _ in range(10):
+                    if w is None:
                         break
-                    if hasattr(widget, 'refresh_recent_reports_ui'):
-                        widget.refresh_recent_reports_ui()
+                    if hasattr(w, 'refresh_recent_reports_ui'):
+                        w.refresh_recent_reports_ui()
                         break
-                    widget = widget.parent()
+                    w = w.parent()
             except Exception:
                 pass
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to generate PDF: {str(e)}")
+        def _cleanup():
+            try:
+                thread.quit()
+                thread.wait(3000)
+            except Exception:
+                pass
+
+        worker.finished.connect(on_finished)
+        worker.error.connect(on_error)
+        worker.ui_refresh.connect(on_ui_refresh)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+
+        # ── Flush pending repaints BEFORE starting the thread ─────────────────
+        # This gives the ECG canvas one full repaint cycle so waves update visibly
+        # before any thread overhead begins — eliminates the "jitter on Save click".
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
+
+        thread.start()
+        # Main thread returns immediately — ECG timer keeps firing uninterrupted.
 
     def export_csv(self):
         """Export ECG data to CSV file in the same format as dummydata.csv"""
@@ -8057,7 +8089,15 @@ class ECGTestPage(QWidget):
                     try:
                         if i < len(self.data):
                             raw = np.asarray(self.data[i])
-                            
+
+                            # ── Resolve fs FIRST — used by every pipeline step below ──
+                            fs = 500
+                            if hasattr(self, 'sampler') and getattr(self.sampler, 'sampling_rate', None):
+                                try:
+                                    fs = float(self.sampler.sampling_rate)
+                                except Exception:
+                                    fs = 500
+
                             # --- PIPELINE STEP 1: Optional 50/60 Hz AC filter (respect Set Filter) ---
                             try:
                                 from ecg.ecg_filters import apply_ac_filter
@@ -8069,7 +8109,7 @@ class ECGTestPage(QWidget):
                             except Exception:
                                 # On any error, fall back to unfiltered raw so display never breaks
                                 pass
-                            
+
                             # --- PIPELINE STEP 2: Gaussian Smoothing ---
                             try:
                                 if len(raw) > 5:
@@ -8090,35 +8130,26 @@ class ECGTestPage(QWidget):
                                 if not hasattr(self, '_baseline_anchors'):
                                     self._baseline_anchors = [0.0] * 12
                                     self._baseline_alpha_slow = 0.0005  # Monitor-grade: ~4 sec time constant at 500 Hz
-                                
+
                                 if len(raw) > 0:
                                     # Extract low-frequency baseline estimate (removes respiration 0.1-0.35 Hz)
                                     baseline_estimate = self._extract_low_frequency_baseline(raw, fs)
-                                    
+
                                     # Update anchor with slow EMA (tracks only very-low-frequency drift)
                                     self._baseline_anchors[i] = (1 - self._baseline_alpha_slow) * self._baseline_anchors[i] + self._baseline_alpha_slow * baseline_estimate
-                                    
+
                                     # Subtract anchor (NOT raw mean, NOT baseline estimate directly)
                                     raw = raw - self._baseline_anchors[i]
-                                    
-                                    # Final zero-centering to ensure perfect centering before gain (so baseline stays fixed at 2048/-2048)
-                                    # This ensures that when we add 2048/-2048 after gain, the baseline position doesn't shift
+
+                                    # Final zero-centering to ensure perfect centering before gain
                                     current_dc = np.nanmean(raw) if len(raw) > 0 else 0.0
                                     raw = raw - current_dc
                             except Exception as filter_error:
-                                # Fallback: use original signal (baseline anchor handles it, no mean subtraction)
-                                print(f" Using fallback baseline correction: {filter_error}")
+                                # Fallback: use original signal — silent, no print spam
                                 pass
-                            
-                            # Apply gain to zero-centered signal (only amplifies variations, baseline stays at zero)
-                            raw = raw * gain
 
-                            fs = 500
-                            if hasattr(self, 'sampler') and getattr(self.sampler, 'sampling_rate', None):
-                                try:
-                                    fs = float(self.sampler.sampling_rate)
-                                except Exception:
-                                    fs = 500
+                            # Apply gain to zero-centered signal
+                            raw = raw * gain
                             # Trim small margins from both ends to reduce filter edge artefacts
                             try:
                                 edge_trim = int(0.5 * fs)  # ~200ms on each side at 500 Hz

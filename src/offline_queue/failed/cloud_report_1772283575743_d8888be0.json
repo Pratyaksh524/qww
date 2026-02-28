@@ -1,0 +1,23 @@
+{
+  "id": "cloud_report_1772283575743_d8888be0",
+  "type": "cloud_report",
+  "data": {
+    "file_path": "C:/Users/DELL/Downloads/ECG_Report_12_1_20260228_182929.pdf",
+    "metadata": {
+      "filename": "ECG_Report_12_1_20260228_182929.pdf",
+      "uploaded_at": "2026-02-28T18:29:35.741431",
+      "file_size": 393622,
+      "file_type": ".pdf",
+      "patient_name": "Unknown",
+      "patient_age": "",
+      "report_date": "",
+      "machine_serial": "",
+      "heart_rate": "59"
+    },
+    "cloud_service": "s3"
+  },
+  "priority": 2,
+  "queued_at": "2026-02-28T12:59:35.743208Z",
+  "retry_count": 4,
+  "status": "pending"
+}
