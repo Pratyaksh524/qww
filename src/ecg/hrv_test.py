@@ -1190,10 +1190,22 @@ class HRVTestWindow(QWidget):
                 self.ecg_calculator.sampling_rate = current_fs
 
                 # TRIGGER STABLE MEDIAN-BEAT ANALYSIS (Same as 12-lead test)
-                # This ensures we use the exact same logic as the dashboard for intervals
+                # KEY FIX: Sync the headless ecg_calculator with the current Holter BPM
+                # so calculate_ecg_metrics() uses the right rr_ms when computing QTc.
+                # Without this, the headless instance ignores hardware BPM changes.
+                _bpm_active = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
+                _current_bpm = 0
+                if _bpm_active:
+                    try:
+                        _current_bpm = self._bpm_ctrl.current_bpm()
+                        if _current_bpm > 0:
+                            # Sync last_heart_rate so calculate_ecg_metrics picks up the right rr_ms
+                            self.ecg_calculator.last_heart_rate = int(round(_current_bpm))
+                    except Exception:
+                        pass
+
+                # ECGTestPage.calculate_ecg_metrics() updates its internal metric attrs
                 try:
-                    # ECGTestPage.calculate_ecg_metrics() updates its internal metric_labels
-                    # using the median beat (GE/Philips standard)
                     self.ecg_calculator.calculate_ecg_metrics()
                 except Exception as e:
                     print(f" calculate_ecg_metrics error in HRV test: {e}")
@@ -1210,6 +1222,16 @@ class HRVTestWindow(QWidget):
                     except:
                         return fallback
 
+                # If Holter BPM is active, recompute QTc from waveform QT + stable BPM.
+                # This ensures QTc updates whenever BPM changes, even if QT waveform hasn't changed.
+                if _bpm_active and _current_bpm > 0:
+                    qt_raw = getattr(self.ecg_calculator, 'last_qt_interval', 0)
+                    if qt_raw > 0:
+                        import math
+                        rr_s = 60.0 / _current_bpm  # RR in seconds
+                        qtc_recomputed = int(round((qt_raw / 1000.0) / math.sqrt(rr_s) * 1000.0))
+                        self.ecg_calculator.last_qtc_interval = qtc_recomputed
+
                 # Also try get_current_metrics as secondary source
                 metrics = self.ecg_calculator.get_current_metrics()
 
@@ -1220,8 +1242,6 @@ class HRVTestWindow(QWidget):
                 qtc_val = _attr_to_str('last_qtc_interval') or metrics.get('qtc_interval', '0')
                 st_val  = _attr_to_str('last_st_interval') or metrics.get('st_interval', '0')
 
-                # Check if HolterBPM is overriding HR
-                _bpm_active = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
 
                 # Update UI labels with identical formatting to 12-lead test
                 if not _bpm_active and 'heart_rate' in self.metric_labels:

@@ -894,27 +894,33 @@ class HyperkalemiaTestWindow(QWidget):
                 self.ecg_calculator.sampling_rate = current_fs
 
                 # TRIGGER STABLE MEDIAN-BEAT ANALYSIS
+                # KEY FIX: Sync the headless ecg_calculator with the current Holter BPM
+                # so calculate_ecg_metrics() uses the right rr_ms when computing QTc.
+                _bpm_active = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
+                _current_bpm = 0
+                if _bpm_active:
+                    try:
+                        _current_bpm = self._bpm_ctrl.current_bpm()
+                        if _current_bpm > 0:
+                            self.ecg_calculator.last_heart_rate = int(round(_current_bpm))
+                    except Exception:
+                        pass
+
                 try:
-                    # Look at active portion only to avoid skew from leading zeros
                     original_buffers = {}
                     for idx in self.lead_indices.values():
                         original_buffers[idx] = self.ecg_calculator.data[idx]
                         if self.active_samples < len(original_buffers[idx]):
                             self.ecg_calculator.data[idx] = original_buffers[idx][-self.active_samples:]
                     
-                    # Run the full clinical analysis suite
                     self.ecg_calculator.calculate_ecg_metrics()
                     
-                    # Restore buffer references
                     for idx, original in original_buffers.items():
                         self.ecg_calculator.data[idx] = original
                 except Exception as e:
                     print(f" calculate_ecg_metrics error in Hyperkalemia test: {e}")
 
                 # FETCH METRICS DIRECTLY from the calculator's stored attributes.
-                # get_current_metrics() reads from UI label text, but ecg_calculator
-                # is a headless instance with no visible labels → always returns '0'.
-                # The attributes below are set by calculate_ecg_metrics() directly.
                 def _attr_to_str(attr_name, fallback='0'):
                     v = getattr(self.ecg_calculator, attr_name, 0)
                     try:
@@ -922,6 +928,16 @@ class HyperkalemiaTestWindow(QWidget):
                         return str(iv) if iv > 0 else fallback
                     except:
                         return fallback
+
+                # If Holter BPM is active, recompute QTc from waveform QT + stable BPM.
+                # This ensures QTc updates whenever BPM changes, even if QT waveform hasn't changed.
+                if _bpm_active and _current_bpm > 0:
+                    qt_raw = getattr(self.ecg_calculator, 'last_qt_interval', 0)
+                    if qt_raw > 0:
+                        import math
+                        rr_s = 60.0 / _current_bpm
+                        qtc_recomputed = int(round((qt_raw / 1000.0) / math.sqrt(rr_s) * 1000.0))
+                        self.ecg_calculator.last_qtc_interval = qtc_recomputed
 
                 # Also call get_current_metrics as a secondary/fallback source
                 metrics = self.ecg_calculator.get_current_metrics()
@@ -940,9 +956,6 @@ class HyperkalemiaTestWindow(QWidget):
                 if qt_val != '0':  self.last_metrics['qt_interval'] = qt_val
                 if qtc_val != '0': self.last_metrics['qtc_interval'] = qtc_val
 
-                # Check if HolterBPM is overriding HR
-                _bpm_active = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
-
                 print(f"Heart Rate: {hr_val} BPM, PR Interval: {pr_val} ms, QRS Duration: {qrs_val} ms, QTC Interval: {qtc_val} ms")
 
                 if not _bpm_active and 'heart_rate' in self.metric_labels:
@@ -952,11 +965,11 @@ class HyperkalemiaTestWindow(QWidget):
                 if 'qrs_duration' in self.metric_labels:
                     self.metric_labels['qrs_duration'].setText(f"{qrs_val} ms" if qrs_val != '0' else "0 ms")
                 if 'qtc_interval' in self.metric_labels:
-                    # Prefer explicit QT + QTc if available; fall back to QTc only
                     if qt_val not in ('', '0') and qtc_val not in ('', '0'):
                         self.metric_labels['qtc_interval'].setText(f"{qt_val}/{qtc_val} ms")
                     else:
                         self.metric_labels['qtc_interval'].setText(f"{qtc_val} ms" if qtc_val not in ('', '0') else "0 ms")
+
 
         
         except Exception as e:
