@@ -786,7 +786,7 @@ class ECGTestPage(QWidget):
             self._bpm_ctrl = HolterBPMController(
                 parent_widget=self,
                 fs=500,
-                chunk_seconds=10,
+                chunk_seconds=30,   # 30-second window → ~150 R-peaks, very stable
             )
         except Exception as _bpm_init_err:
             print(f"[ECGTestPage] HolterBPMController init failed: {_bpm_init_err}")
@@ -3719,10 +3719,13 @@ class ECGTestPage(QWidget):
             self._last_metric_update_ts = 0.0
 
         metric_labels = getattr(self, 'metric_labels', {})
+        # HolterBPMController is the exclusive source of HR when active
+        _skip_hr = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
         self._last_metric_update_ts = update_ecg_metrics_display(
             metric_labels, heart_rate, pr_interval, qrs_duration, p_duration,
             qt_interval, qtc_interval, qtcf_interval, self._last_metric_update_ts,
-            rr_interval=rr_interval,   # FIX-D1: forward RR to display layer
+            rr_interval=rr_interval,      # FIX-D1: forward RR to display layer
+            skip_heart_rate=_skip_hr,     # HolterBPM owns the HR label
         )
 
     def get_current_metrics(self):
@@ -4013,10 +4016,12 @@ class ECGTestPage(QWidget):
         # BPM FREEZE: Don't update heart rate display during report generation
         if getattr(self, '_report_generating', False):
             return
-        if 'Heart_Rate' in intervals and intervals['Heart_Rate'] is not None:
-            # Fixed-width formatting (3 digits) to prevent text shifting
-            hr_val = int(round(intervals['Heart_Rate'])) if isinstance(intervals['Heart_Rate'], (int, float)) else int(intervals['Heart_Rate']) if str(intervals['Heart_Rate']).isdigit() else 0
-            self.metric_labels['heart_rate'].setText(f"{hr_val:3d}")
+        # HolterBPMController owns the HR label — skip Heart_Rate from old pipeline
+        _bpm_active = (self._bpm_ctrl is not None and self._bpm_ctrl.is_running)
+        if not _bpm_active:
+            if 'Heart_Rate' in intervals and intervals['Heart_Rate'] is not None:
+                hr_val = int(round(intervals['Heart_Rate'])) if isinstance(intervals['Heart_Rate'], (int, float)) else int(intervals['Heart_Rate']) if str(intervals['Heart_Rate']).isdigit() else 0
+                self.metric_labels['heart_rate'].setText(f"{hr_val:3d}")
 
         
         if 'PR' in intervals and intervals['PR'] is not None:
@@ -5751,6 +5756,13 @@ class ECGTestPage(QWidget):
                         self._bpm_ctrl.display_bar.show()
                 except Exception:
                     pass
+
+                # ★ 3-second BPM refresh timer — ONLY source that writes to HR label
+                if not hasattr(self, '_bpm_refresh_timer'):
+                    self._bpm_refresh_timer = QTimer()
+                    self._bpm_refresh_timer.timeout.connect(self._refresh_holter_bpm_label)
+                if not self._bpm_refresh_timer.isActive():
+                    self._bpm_refresh_timer.start(3000)
         except Exception as _bpm_start_err:
             print(f"[ECGTestPage] BPM controller start error: {_bpm_start_err}")
         if hasattr(self, '_12to1_timer'):
@@ -5885,6 +5897,23 @@ class ECGTestPage(QWidget):
 
     # ---------------------- Stop Button Functionality ----------------------
 
+    def _refresh_holter_bpm_label(self):
+        """Called every 3 s by _bpm_refresh_timer.
+        Reads the stable 30-second-window BPM from HolterBPMController and
+        writes it to the heart_rate metric label.
+        This is the ONLY place that updates the HR label during live acquisition.
+        """
+        try:
+            if self._bpm_ctrl is None or not self._bpm_ctrl.is_running:
+                return
+            bpm = self._bpm_ctrl.current_bpm()
+            if bpm > 0 and hasattr(self, 'metric_labels') and 'heart_rate' in self.metric_labels:
+                self.metric_labels['heart_rate'].setText(f"{int(round(bpm)):3d}")
+                # Keep last_heart_rate in sync so reports get the right value
+                self.last_heart_rate = int(round(bpm))
+        except Exception as _e:
+            print(f"[ECGTestPage] _refresh_holter_bpm_label error: {_e}")
+
     def stop_acquisition(self):
         # UPDATE STATE: Test stopped
         if hasattr(self, 'dashboard_instance') and self.dashboard_instance:
@@ -5892,6 +5921,9 @@ class ECGTestPage(QWidget):
 
         # ── Stop HolterBPMController ──────────────────────────────────────────
         try:
+            # Stop the 3-second refresh timer first
+            if hasattr(self, '_bpm_refresh_timer') and self._bpm_refresh_timer.isActive():
+                self._bpm_refresh_timer.stop()
             if self._bpm_ctrl is not None and self._bpm_ctrl.is_running:
                 self._bpm_ctrl.stop()
                 if self._bpm_ctrl.display_bar is not None:

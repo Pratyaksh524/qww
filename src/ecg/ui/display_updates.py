@@ -28,6 +28,7 @@ def update_ecg_metrics_display(
         qtcf_interval: Optional[int] = None,
         last_update_ts: Optional[float] = None,
         rr_interval: Optional[float] = None,       # FIX-D1: new param
+        skip_heart_rate: bool = False,              # HolterBPM: bypass old HR path
 ) -> float:
     """Update the ECG metrics display in the UI.
 
@@ -54,9 +55,11 @@ def update_ecg_metrics_display(
             return current_time
 
         # ── BPM ──────────────────────────────────────────────────────────────
-        if 'heart_rate' in metric_labels:
-            hr_val = int(round(heart_rate)) if isinstance(heart_rate, (int, float)) else 0
-            metric_labels['heart_rate'].setText(f"{hr_val:3d}")
+        # skip_heart_rate=True → controlled exclusively by HolterBPMController
+        if not skip_heart_rate:
+            if 'heart_rate' in metric_labels:
+                hr_val = int(round(heart_rate)) if isinstance(heart_rate, (int, float)) else 0
+                metric_labels['heart_rate'].setText(f"{hr_val:3d}")
 
         # ── RR Interval ───────────────────────────────────────────────────── FIX-D1
         if 'rr_interval' in metric_labels:

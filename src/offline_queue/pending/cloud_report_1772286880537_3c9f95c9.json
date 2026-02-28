@@ -13,6 +13,6 @@
   },
   "priority": 2,
   "queued_at": "2026-02-28T13:54:40.537417Z",
-  "retry_count": 1,
+  "retry_count": 2,
   "status": "pending"
 }
