@@ -13,6 +13,20 @@ import sys
 import json
 import matplotlib.pyplot as plt  
 import matplotlib
+import os
+import logging
+from datetime import datetime
+
+# Setup logging for edge trimming debugging
+log_dir = "/Users/indresh/Desktop/2_mar/logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"6_2_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+logging.basicConfig(filename=log_file, level=logging.DEBUG, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+logging.getLogger().addHandler(console_handler)
+
 import numpy as np
 
 # matplotlib.use('Agg') # Removed to prevent main thread Qt canvas corruption
@@ -25,12 +39,12 @@ ECG_LARGE_BOX_MM = 210.0 / 40.0  # = 5.25mm
 ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0  # = 1.05mm
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM  # = 1.05
 SIX_TWO_SAMPLES_COLUMN = 2500
-SIX_TWO_SAMPLES_EXTRA_II = 4500
+SIX_TWO_SAMPLES_EXTRA_II = 5200
 
 # UNIFIED BOX CONFIGURATION
 COLUMN1_BOXES = 26.3
 COLUMN2_BOXES = 26.3  
-EXTRA_LEAD2_BOXES = 35.0  
+EXTRA_LEAD2_BOXES = 52.0  
 
 
 # ------------------------ Resource path helper for PyInstaller compatibility ------------------------
@@ -265,11 +279,18 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
         fs = float(sampling_rate)
     except Exception:
         fs = 500.0
-    pad_seconds = 2.0
+    try:
+        win_sec = float(str(settings_manager.get_setting("report_window_seconds", "10")).strip() or "10")
+    except Exception:
+        win_sec = 10.0
+    window_samples = int(max(1.0, win_sec) * fs)
+    if arr.size > window_samples:
+        arr = arr[-window_samples:]
+    pad_seconds = 4.0
     pad_samples = int(pad_seconds * fs)
     pad = min(pad_samples, max(0, arr.size - 1))
     if pad > 0:
-        work = np.pad(arr, pad_width=pad, mode="edge")
+        work = np.pad(arr, pad_width=pad, mode="reflect")
     else:
         work = arr
     dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
@@ -289,11 +310,72 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
     try:
         if filtered.size > 5:
             from scipy.ndimage import gaussian_filter1d
-            filtered = gaussian_filter1d(filtered, sigma=0.8)
+            filtered = gaussian_filter1d(filtered, sigma=0.3)
+    except Exception:
+        pass
+    try:
+        n = filtered.size
+        if n > 50:
+            edge_len = max(50, int(0.10 * n))
+            mid_start = n // 3
+            mid_end = (2 * n) // 3
+            start_std = np.std(np.diff(filtered[:edge_len]))
+            end_std = np.std(np.diff(filtered[-edge_len:]))
+            mid_std = np.std(np.diff(filtered[mid_start:mid_end])) + 1e-6
+            start_trim = int(0.05 * n) if start_std > 1.5 * mid_std else 0
+            end_trim = int(0.05 * n) if end_std > 1.5 * mid_std else 0
+            if start_trim + end_trim < n - 20:
+                filtered = filtered[start_trim:n - end_trim]
+    except Exception:
+        pass
+    try:
+        if filtered.size > 5:
+            dif = np.diff(filtered, prepend=filtered[0])
+            th = 5.0 * (np.std(dif) + 1e-6)
+            bad = np.where(np.abs(dif) > th)[0]
+            for i in bad:
+                if 1 <= i < filtered.size - 1:
+                    filtered[i] = 0.5 * (filtered[i - 1] + filtered[i + 1])
     except Exception:
         pass
     if pad > 0 and filtered.size > 2 * pad:
         filtered = filtered[pad:-pad]
+    try:
+        n2 = filtered.size
+        if n2 > 50:
+            edge_len2 = max(50, int(0.10 * n2))
+            mid_start2 = n2 // 3
+            mid_end2 = (2 * n2) // 3
+            start_std2 = np.std(np.diff(filtered[:edge_len2]))
+            end_std2 = np.std(np.diff(filtered[-edge_len2:]))
+            mid_std2 = np.std(np.diff(filtered[mid_start2:mid_end2])) + 1e-6
+            start_trim2 = int(0.05 * n2) if start_std2 > 1.3 * mid_std2 else 0
+            end_trim2 = int(0.05 * n2) if end_std2 > 1.3 * mid_std2 else 0
+            if start_trim2 + end_trim2 < n2 - 20:
+                filtered = filtered[start_trim2:n2 - end_trim2]
+    except Exception:
+        pass
+    try:
+        n3 = filtered.size
+        if n3 > 100:
+            hard_trim = max(10, int(0.03 * n3))
+            filtered = filtered[hard_trim:n3 - hard_trim]
+    except Exception:
+        pass
+    try:
+        n4 = filtered.size
+        if n4 > 50:
+            alpha = 0.5
+            m = max(10, int((alpha * n4) / 2.0))
+            if m * 2 < n4:
+                ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, m)))
+                w = np.ones(n4)
+                w[:m] = ramp
+                w[-m:] = ramp[::-1]
+                mu = float(np.mean(filtered))
+                filtered = mu + (filtered - mu) * w
+    except Exception:
+        pass
     return filtered
 
 def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
@@ -462,71 +544,43 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
         "V6": 11, "Extra Lead II": 12
     }
     
-    # Check if demo mode is active and get time window for filtering
-    is_demo_mode = False
+    # FORCE REAL DATA ONLY - DISABLE DEMO MODE FOR REPORTS
+    is_demo_mode = False  # Always use real data for reports
     time_window_seconds = None
     samples_per_second = samples_per_second or 150
+    print(" 6_2 REPORT GENERATION: Using REAL data only (Demo mode disabled for consistency)")
     
-    if ecg_test_page and hasattr(ecg_test_page, 'demo_toggle'):
-        is_demo_mode = ecg_test_page.demo_toggle.isChecked()
-        if is_demo_mode:
-            # Get time window from demo manager
-            if hasattr(ecg_test_page, 'demo_manager') and ecg_test_page.demo_manager:
-                time_window_seconds = getattr(ecg_test_page.demo_manager, 'time_window', None)
-                samples_per_second = getattr(ecg_test_page.demo_manager, 'samples_per_second', 150)
-                print(f" DEMO MODE ON - Wave speed window: {time_window_seconds}s, Sampling rate: {samples_per_second}Hz")
-            else:
-                # Fallback: calculate from wave speed setting
-                try:
-                    from utils.settings_manager import SettingsManager
-                    sm = SettingsManager()
-                    wave_speed = float(sm.get_wave_speed())
-                    ecg_graph_width_mm = COLUMN1_BOXES * ECG_LARGE_BOX_MM
-                    time_window_seconds = ecg_graph_width_mm / wave_speed
-                    print(f" DEMO MODE ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {wave_speed}mm/s = {time_window_seconds}s")
-                except Exception as e:
-                    print(f" Could not get demo time window: {e}")
-                    time_window_seconds = None
-    # Try to get REAL ECG data from the test page
+    # Try to get ACTUAL sampling rate from the test page
+    if ecg_test_page and hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler, 'sampling_rate'):
+        if ecg_test_page.sampler.sampling_rate:
+            samples_per_second = float(ecg_test_page.sampler.sampling_rate)
+            print(f" Found sampler sampling rate: {samples_per_second}Hz")
+    elif ecg_test_page and hasattr(ecg_test_page, 'sampling_rate'):
+        if ecg_test_page.sampling_rate:
+            samples_per_second = float(ecg_test_page.sampling_rate)
+            print(f" Found page sampling rate: {samples_per_second}Hz")
+    # Try to get REAL ECG data from test page
     real_ecg_data = {}
     if ecg_test_page and hasattr(ecg_test_page, 'data'):
         
-        # Calculate number of samples to capture based on demo mode
-        if is_demo_mode and time_window_seconds is not None:
-            # In demo mode: only capture data visible in one window frame
-            num_samples_to_capture = int(time_window_seconds * samples_per_second)
-            print(f" DEMO MODE: Capturing only {num_samples_to_capture} samples ({time_window_seconds}s window)")
-        else:
-            # Normal mode: capture maximum data (10 seconds or 10000 points, whichever is smaller)
-            num_samples_to_capture = 10000
-            print(f" NORMAL MODE: Capturing up to {num_samples_to_capture} samples")
+        # ALWAYS USE REAL DATA - No demo mode windowing
+        num_samples_to_capture = 10000
+        print(f" REAL DATA MODE: Capturing up to {num_samples_to_capture} samples from live buffer")
         
         for lead in ordered_leads:
             if lead == "-aVR":
                 # For -aVR, we need to invert aVR data
                 if hasattr(ecg_test_page, 'data') and len(ecg_test_page.data) > 3:
                     avr_data = np.array(ecg_test_page.data[3])  # aVR is at index 3
-                    if is_demo_mode and time_window_seconds is not None:
-                        # Demo mode: only capture window frame data
-                        real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
-                        print(f" Captured DEMO -aVR data: {len(real_ecg_data[lead])} points ({time_window_seconds}s window)")
-                    else:
-                        # Normal mode: capture maximum data
-                        real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
-                        print(f" Captured REAL -aVR data: {len(real_ecg_data[lead])} points")
+                    real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
+                    print(f" Captured REAL -aVR data: {len(real_ecg_data[lead])} points")
             else:
                 lead_index = lead_to_index.get(lead)
                 if lead_index is not None and len(ecg_test_page.data) > lead_index:
                     lead_data = np.array(ecg_test_page.data[lead_index])
                     if len(lead_data) > 0:
-                        if is_demo_mode and time_window_seconds is not None:
-                            # Demo mode: only capture window frame data
-                            real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
-                            print(f" Captured DEMO {lead} data: {len(real_ecg_data[lead])} points ({time_window_seconds}s window)")
-                        else:
-                            # Normal mode: capture maximum data
-                            real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
-                            print(f" Captured REAL {lead} data: {len(real_ecg_data[lead])} points")
+                        real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
+                        print(f" Captured REAL {lead} data: {len(real_ecg_data[lead])} points")
                     else:
                         print(f" No data found for {lead}")
                 else:
@@ -545,30 +599,13 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
             wave_gain_mm_mv = 10.0
             print(f" Could not get wave_gain from settings, using default: {wave_gain_mm_mv} mm/mV")
     
-    # Apply report filters (AC/EMG/DFT) based on current settings
-    filtered_ecg_data = real_ecg_data
-    try:
-        from ecg.ecg_filters import apply_dft_filter, apply_emg_filter, apply_ac_filter
-        dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
-        emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
-        ac_setting = str(settings_manager.get_setting("filter_ac", "50")).strip()
-        filtered_ecg_data = {}
-        for lead, signal in real_ecg_data.items():
-            if signal is None or len(signal) == 0:
-                filtered_ecg_data[lead] = signal
-                continue
-            filtered = signal
-            if dft_setting not in ("off", ""):
-                filtered = apply_dft_filter(filtered, float(samples_per_second), dft_setting)
-            if emg_setting not in ("off", ""):
-                filtered = apply_emg_filter(filtered, float(samples_per_second), emg_setting)
-            if ac_setting in ("50", "60"):
-                filtered = apply_ac_filter(filtered, float(samples_per_second), ac_setting)
-            filtered_ecg_data[lead] = filtered
-        print(f" Applied report filters: DFT={dft_setting}, EMG={emg_setting}, AC={ac_setting}")
-    except Exception as e:
-        print(f" Could not apply report filters: {e}")
-        filtered_ecg_data = real_ecg_data
+    # Apply report filters per lead using wrapper (parity with 4:3/main)
+    filtered_ecg_data = {}
+    for lead, signal in real_ecg_data.items():
+        try:
+            filtered_ecg_data[lead] = apply_report_ecg_filters(signal, samples_per_second, settings_manager)
+        except Exception:
+            filtered_ecg_data[lead] = signal
 
     # Create ReportLab drawings with REAL (filtered) data
     for lead in ordered_leads:
@@ -702,6 +739,38 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         
         # Convert boxes offset to Y position
         ecg_normalized = center_y + (boxes_offset * box_height_points)
+        
+        try:
+            from ecg.ecg_filters import apply_baseline_wander_median_mean
+            local = ecg_normalized - center_y
+            local = apply_baseline_wander_median_mean(local, 500.0)
+            ecg_normalized = center_y + local
+        except Exception:
+            pass
+        try:
+            idx = np.arange(len(ecg_normalized))
+            local = ecg_normalized - center_y
+            trend = np.polyval(np.polyfit(idx, local, 2), idx)
+            ecg_normalized = center_y + (local - trend)
+        except Exception:
+            pass
+        try:
+            local = ecg_normalized - center_y
+            wl = max(25, int(0.12 * len(local)))
+            kernel = np.ones(wl) / float(wl)
+            baseline = np.convolve(local, kernel, mode="same")
+            ecg_normalized = center_y + (local - baseline)
+        except Exception:
+            pass
+        edge = max(30, int(0.25 * len(ecg_normalized)))
+        if len(ecg_normalized) > edge * 2:
+            r = np.sin(np.linspace(0.0, np.pi / 2.0, edge)) ** 2
+            ecg_normalized[:edge] = center_y + (ecg_normalized[:edge] - center_y) * r
+            ecg_normalized[-edge:] = center_y + (ecg_normalized[-edge:] - center_y) * r[::-1]
+        clamp = max(10, int(0.05 * len(ecg_normalized)))
+        if len(ecg_normalized) > clamp * 2:
+            ecg_normalized[:clamp] = center_y
+            ecg_normalized[-clamp:] = center_y
         
         # Draw ALL ECG data points - NO REDUCTION
         ecg_color = colors.HexColor("#000000")  # Black ECG line
@@ -1089,23 +1158,9 @@ def _draw_logo_and_footer_callback(canvas, doc_obj, patient=None):
 def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, dashboard_instance=None, ecg_test_page=None, patient=None, ecg_data_file=None):
     """
     Generate ECG report PDF
-    
-    Parameters:
-        ecg_data_file: Optional path to saved ECG data file. 
-                       If provided, will load from file instead of live ecg_test_page.
-                       If None and ecg_test_page provided, will save data first.
-    
-    Example:
-        # Option 1: Save data first, then generate report
-        saved_file = save_ecg_data_to_file(ecg_test_page)
-        generate_ecg_report("report.pdf", data=metrics, ecg_test_page=ecg_test_page, ecg_data_file=saved_file)
-        
-        # Option 2: Generate report and auto-save data
-        generate_ecg_report("report.pdf", data=metrics, ecg_test_page=ecg_test_page)
-        # Data will be automatically saved before report generation
     """
-   
-   
+    from reportlab.lib.units import mm
+    
     # Main function body starts here
     if data is None:
         # When no device connected or demo off - show ZERO values (not dummy values)
@@ -1608,6 +1663,23 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         x_pos = pos_info["x"]
         y_pos = pos_info["y"]
         
+        # Determine per-lead sample window based on wave speed (NEW LOGIC)
+        # 12.5 mm/s -> Full samples (2500/5200) to plot half width (~13/26 boxes)
+        # 25 mm/s -> Full samples (2500/5200) to plot full width (~26/52 boxes)
+        # 50 mm/s -> Half samples (1250/2600) to fit in full width (~26/52 boxes)
+        if abs(wave_speed_mm_s - 50.0) < 0.1:
+            # 50 mm/s -> Use half samples to stay within full 26/52 boxes space
+            current_num_samples = SIX_TWO_SAMPLES_COLUMN // 2  # 1250 samples -> 25 boxes at 50mm/s
+            extra_ii_samples = SIX_TWO_SAMPLES_EXTRA_II // 2   # 2600 samples -> 52 boxes at 50mm/s
+            print(f" Wave speed 50.0 detected: Using half-samples ({current_num_samples}/{extra_ii_samples})")
+        else:
+            # 25 or 12.5 mm/s -> Standard full samples
+            # At 12.5: 2500 samples = 5s = 12.5 boxes (half-width)
+            # At 25: 2500 samples = 5s = 25 boxes (full-width)
+            current_num_samples = SIX_TWO_SAMPLES_COLUMN       # 2500 samples
+            extra_ii_samples = SIX_TWO_SAMPLES_EXTRA_II        # 5200 samples
+            print(f" Wave speed {wave_speed_mm_s} detected: Using full-samples ({current_num_samples}/{extra_ii_samples})")
+
         print(f" DEBUG: Processing Lead {lead} at position ({x_pos}, {y_pos})")
         print(f" DEBUG: Drawing dimensions: width={total_width}, height={total_height}")
         
@@ -1690,73 +1762,8 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 else:
                     return None
             
-            # Priority 1: Use saved_ecg_data (REQUIRED for calculation-based beats)
-            saved_data_samples = 0  # Initialize for comparison with live data
-            if saved_ecg_data and 'leads' in saved_ecg_data:
-                # For calculated leads, calculate from I and II
-                if lead in ["III", "aVR", "aVL", "aVF", "-aVR"]:
-                    if "I" in saved_ecg_data['leads'] and "II" in saved_ecg_data['leads']:
-                        lead_i_data = saved_ecg_data['leads']["I"]
-                        lead_ii_data = saved_ecg_data['leads']["II"]
-                        
-                        # Ensure same length
-                        min_len = min(len(lead_i_data), len(lead_ii_data))
-                        lead_i_data = lead_i_data[:min_len]
-                        lead_ii_data = lead_ii_data[:min_len]
-                        
-                        # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
-                        # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
-                        lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
-                        lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
-                        
-                        # Calculate derived lead from centered values
-                        calculated_data = calculate_derived_lead(lead, lead_i_centered, lead_ii_centered)
-                        if calculated_data is not None:
-                            raw_data = calculated_data.tolist() if isinstance(calculated_data, np.ndarray) else calculated_data
-                            print(f" Calculated {lead} from saved I and II data (baseline-subtracted): {len(raw_data)} points")
-                        else:
-                            # Fallback to saved data if calculation fails
-                            lead_name_for_saved = lead.replace("-aVR", "aVR")
-                            if lead_name_for_saved in saved_ecg_data['leads']:
-                                raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                                if lead == "-aVR":
-                                    raw_data = [-x for x in raw_data]  # Invert for -aVR
-                            else:
-                                raw_data = []
-                    else:
-                        print(f" Cannot calculate {lead}: I or II data missing in saved file")
-                        raw_data = []
-                else:
-                    # For non-calculated leads, use saved data directly
-                    lead_name_for_saved = lead.replace("-aVR", "aVR")  # Handle -aVR case
-                    if lead_name_for_saved in saved_ecg_data['leads']:
-                        raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                        if lead == "-aVR":
-                            raw_data = [-x for x in raw_data]  # Invert for -aVR
-                    else:
-                        raw_data = []
-                
-                if len(raw_data) > 0:
-                    # Check if saved data has enough samples for calculated time window
-                    saved_data_samples = len(raw_data)
-                    if saved_data_samples < lead_samples_to_capture:
-                        print(f" SAVED FILE {lead} has only {saved_data_samples} samples, need {lead_samples_to_capture} for {lead_time_window_seconds:.2f}s window")
-                        print(f"   Will use ALL saved data ({saved_data_samples} samples) - may show fewer beats than calculated")
-                        # Use all available saved data (don't filter)
-                        raw_data_to_use = raw_data
-                    else:
-                        # Apply time window filtering based on calculated window
-                        raw_data_to_use = raw_data[-lead_samples_to_capture:]
-                    
-                    if len(raw_data_to_use) > 0 and np.std(raw_data_to_use) > 0.01:
-                        real_ecg_data = np.array(raw_data_to_use)
-                        real_data_available = True
-                        time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                        actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                        print(f" Using SAVED FILE {lead} data: {len(real_ecg_data)} points (requested: {time_window_str}, actual: {actual_time_window:.2f}s, std: {np.std(real_ecg_data):.2f})")
-            
-            # Priority 2: Fallback to live dashboard data (if saved data not available OR has insufficient samples)
+            # Priority 1: Use ONLY live dashboard data (ignore saved data completely)
+            # Use live dashboard data only
             # Check if live data has MORE samples than saved data
             if ecg_test_page and hasattr(ecg_test_page, 'data'):
                 lead_to_index = {
@@ -1789,20 +1796,14 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                             calculated_data = calculate_derived_lead(lead, lead_i_centered, lead_ii_centered)
                             if calculated_data is not None:
                                 live_data_samples = len(calculated_data)
-                                use_live_data = False
-                                if not real_data_available:
-                                    use_live_data = True
-                                elif live_data_samples > saved_data_samples:
-                                    use_live_data = True
-                                
-                                if use_live_data:
-                                    raw_data = calculated_data
-                                    if len(raw_data) >= lead_samples_to_capture:
-                                        raw_data = raw_data[-lead_samples_to_capture:]
-                                    if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                        real_ecg_data = np.array(raw_data)
-                                        real_data_available = True
-                                        actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                                # Always use live dashboard data (ignore any saved data)
+                                raw_data = calculated_data
+                                if len(raw_data) >= lead_samples_to_capture:
+                                    raw_data = raw_data[-lead_samples_to_capture:]
+                                if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                                    real_ecg_data = np.array(raw_data)
+                                    real_data_available = True
+                                    actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
                 
                 # For non-calculated leads, use existing logic
                 if not real_data_available:
@@ -1811,34 +1812,26 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                         live_data_samples = len(ecg_test_page.data[lead_to_index[lead]])
                     
-                    # Use live data if: (1) saved data not available OR (2) live data has MORE samples
-                    use_live_data = False
-                    if not real_data_available:
-                        use_live_data = True
-                    elif live_data_samples > saved_data_samples:
-                        use_live_data = True
-                    
-                    if use_live_data:
-                        if lead == "-aVR" and len(ecg_test_page.data) > 3:
-                            # For -aVR, use filtered inverted aVR data
-                            raw_data = ecg_test_page.data[3]
-                            # Check if we have enough samples, otherwise use all available
-                            if len(raw_data) >= lead_samples_to_capture:
-                                raw_data = raw_data[-lead_samples_to_capture:]
-                            # Check if data is not all zeros or flat
-                            if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
-                                real_ecg_data = np.array(raw_data)
-                                
-                                real_data_available = True
-                                actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                                if is_demo_mode and time_window_seconds is not None:
-                                    pass
-                                else:
-                                    time_window_str = f"{calculated_time_window:.2f}s" if calculated_time_window else "auto"
-                            else:
+                    # Always use live dashboard data (ignore any saved data)
+                    if lead == "-aVR" and len(ecg_test_page.data) > 3:
+                        # For -aVR, use filtered inverted aVR data
+                        raw_data = ecg_test_page.data[3]
+                        # Check if we have enough samples, otherwise use all available
+                        if len(raw_data) >= lead_samples_to_capture:
+                            raw_data = raw_data[-lead_samples_to_capture:]
+                        # Check if data is not all zeros or flat
+                        if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                            # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
+                            real_ecg_data = np.array(raw_data)
+                            real_data_available = True
+                            actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                            if is_demo_mode and time_window_seconds is not None:
                                 pass
-                        elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
+                            else:
+                                time_window_str = f"{calculated_time_window:.2f}s" if calculated_time_window else "auto"
+                        else:
+                            pass
+                    elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                             # Get filtered real data for this lead
                             lead_index = lead_to_index[lead]
                             if len(ecg_test_page.data[lead_index]) > 0:
@@ -1885,18 +1878,74 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     # Column 2 leads keep original position
                     adjusted_x_pos = x_pos
                 
-                from reportlab.lib.units import mm as _mm_units
-                gap = _mm_units if (lead in column1_leads) else 0
-                t = np.linspace(adjusted_x_pos + gap, adjusted_x_pos + ecg_width, len(real_ecg_data))
-                
-                
+                # NEW LOGIC: Use time * speed * scale to align with 5.25mm boxes
+                # 25mm/s speed, scaled by ECG_SPEED_SCALE (1.05) to match 5.25mm boxes
+                # result: 1 second = 5 boxes = 26.25mm (exactly aligned with grid)
+                # Create time array for ALL data (same approach as ecg_report_generator.py)
+                ecg_width = COLUMN_WIDTH_PTS
+                t = np.linspace(adjusted_x_pos, adjusted_x_pos + ecg_width, len(real_ecg_data))
                 
                 adc_data = np.array(real_ecg_data, dtype=float)
 
+                # Apply SAME filters as dashboard (AC notch → EMG → DFT → Gaussian)
                 try:
-                    adc_data = apply_report_ecg_filters(adc_data, float(computed_sampling_rate), settings_manager)
+                    from ecg.ecg_filters import apply_ecg_filters
+                    from scipy.ndimage import gaussian_filter1d as _gf1d
+                    
+                    ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
+                    emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
+                    dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    
+                    # Nyquist guard: AC notch at F Hz requires sampling rate > 2*F Hz
+                    if ac_setting in ("50", "60"):
+                        required_fs = float(ac_setting) * 2.0 + 1.0
+                        if float(computed_sampling_rate) <= required_fs:
+                            print(f" AC filter disabled (rate {computed_sampling_rate} Hz too low for {ac_setting} Hz notch)")
+                            ac_setting = "off"
+                    
+                    adc_data = apply_ecg_filters(
+                        signal=adc_data,
+                        sampling_rate=float(computed_sampling_rate),
+                        ac_filter=ac_setting  if ac_setting  not in ("off", "") else None,
+                        emg_filter=emg_setting if emg_setting not in ("off", "") else None,
+                        dft_filter=dft_setting if dft_setting not in ("off", "") else None,
+                    )
+                    
+                    # Light Gaussian smoothing (sigma=0.8 — same as dashboard)
+                    if len(adc_data) > 5:
+                        adc_data = _gf1d(adc_data, sigma=0.8)
+                    
+                    print(f" Applied dashboard filters: AC={ac_setting}, EMG={emg_setting}, DFT={dft_setting} for {lead}")
                 except Exception as filter_err:
-                    print(f" Report filter apply failed for {lead}: {filter_err}")
+                    print(f" Dashboard filter apply failed for {lead}: {filter_err}")
+
+                # Remove filter transients at edges (same as dashboard approach)
+                # Trim 50 samples from start and end to remove filter artifacts
+                trim_samples = 50
+                logging.info(f"=== LEAD {lead} TRIMMING ANALYSIS ===")
+                logging.info(f"Before trimming - adc_data length: {len(adc_data)}, t length: {len(t)}")
+                logging.info(f"adc_data first 5 values: {adc_data[:5]}")
+                logging.info(f"adc_data last 5 values: {adc_data[-5:]}")
+                logging.info(f"t first 5 values: {t[:5]}")
+                logging.info(f"t last 5 values: {t[-5:]}")
+                
+                if len(adc_data) > (trim_samples * 2):
+                    logging.info(f"Proceeding with trimming {trim_samples} samples")
+                    adc_data = adc_data[trim_samples:-trim_samples]
+                    # Also trim time array to match data length (exact same approach as ecg_report_generator.py)
+                    t = t[trim_samples:-trim_samples]
+                    
+                    logging.info(f"After trimming - adc_data length: {len(adc_data)}, t length: {len(t)}")
+                    logging.info(f"adc_data first 5 values: {adc_data[:5]}")
+                    logging.info(f"adc_data last 5 values: {adc_data[-5:]}")
+                    logging.info(f"t first 5 values: {t[:5]}")
+                    logging.info(f"t last 5 values: {t[-5:]}")
+                    logging.info(f"Trimmed {trim_samples} samples from start and end for {lead}")
+                else:
+                    logging.warning(f"Not enough data to trim for {lead}, using full data")
+                    logging.warning(f"Data length: {len(adc_data)}, Required: {trim_samples * 2}")
+                
+                logging.info(f"=== END LEAD {lead} TRIMMING ANALYSIS ===")
                 
                 # DEBUG: Check if data is already processed (baseline-subtracted)
                 # If data range is far from 2000 baseline, it might already be processed
@@ -2251,17 +2300,19 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     else:
                         raw_data = []
                 
-                if len(raw_data) > 0:
-                    # Check if saved data has enough samples for calculated time window
+                # Check if saved data has enough samples for calculated time window
                     saved_data_samples = len(raw_data)
-                    if saved_data_samples < num_samples_to_capture:
-                        print(f" SAVED FILE {lead} has only {saved_data_samples} samples, need {num_samples_to_capture} for {calculated_time_window:.2f}s window")
-                        print(f"   Will use ALL saved data ({saved_data_samples} samples) - may show fewer beats than calculated")
+                    # Use dynamically calculated current_num_samples/extra_ii_samples instead of fixed num_samples_to_capture
+                    target_samples = extra_ii_samples if (lead == "II" and y_pos == 90) else current_num_samples
+                    
+                    if saved_data_samples < target_samples:
+                        print(f" SAVED FILE {lead} has only {saved_data_samples} samples, need {target_samples} for calculated window")
+                        print(f"   Will use ALL saved data ({saved_data_samples} samples)")
                         # Use all available saved data (don't filter)
                         raw_data_to_use = raw_data
                     else:
                         # Apply time window filtering based on calculated window
-                        raw_data_to_use = raw_data[-num_samples_to_capture:]
+                        raw_data_to_use = raw_data[-target_samples:]
                     
                     if len(raw_data_to_use) > 0 and np.std(raw_data_to_use) > 0.01:
                         real_ecg_data = np.array(raw_data_to_use)
@@ -2303,20 +2354,15 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                             calculated_data = calculate_derived_lead(lead, lead_i_centered, lead_ii_centered)
                             if calculated_data is not None:
                                 live_data_samples = len(calculated_data)
-                                use_live_data = False
-                                if not real_data_available:
-                                    use_live_data = True
-                                elif live_data_samples > saved_data_samples:
-                                    use_live_data = True
-                                
-                                if use_live_data:
-                                    raw_data = calculated_data
-                                    if len(raw_data) >= num_samples_to_capture:
-                                        raw_data = raw_data[-num_samples_to_capture:]
-                                    if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                        real_ecg_data = np.array(raw_data)
-                                        real_data_available = True
-                                        actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                                # Always use live dashboard data (ignore any saved data)
+                                raw_data = calculated_data
+                                target_samples = extra_ii_samples if (lead == "II" and y_pos == 90) else current_num_samples
+                                if len(raw_data) >= target_samples:
+                                    raw_data = raw_data[-target_samples:]
+                                if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                                    real_ecg_data = np.array(raw_data)
+                                    real_data_available = True
+                                    actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
                 
                 # For non-calculated leads, use existing logic
                 if not real_data_available:
@@ -2325,41 +2371,37 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                         live_data_samples = len(ecg_test_page.data[lead_to_index[lead]])
                     
-                    # Use live data if: (1) saved data not available OR (2) live data has MORE samples
-                    use_live_data = False
-                    if not real_data_available:
-                        use_live_data = True
-                    elif live_data_samples > saved_data_samples:
-                        use_live_data = True
-                    
-                    if use_live_data:
-                        if lead == "-aVR" and len(ecg_test_page.data) > 3:
-                            # For -aVR, use filtered inverted aVR data
-                            raw_data = ecg_test_page.data[3]
-                            # Check if we have enough samples, otherwise use all available
-                            if len(raw_data) >= num_samples_to_capture:
-                                raw_data = raw_data[-num_samples_to_capture:]
-                            # Check if data is not all zeros or flat
-                            if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
-                                real_ecg_data = np.array(raw_data)
-                                
-                                real_data_available = True
-                                actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                                if is_demo_mode and time_window_seconds is not None:
-                                    pass
-                                else:
-                                    time_window_str = f"{calculated_time_window:.2f}s" if calculated_time_window else "auto"
-                            else:
+                    # Always use live dashboard data (ignore any saved data)
+                    if lead == "-aVR" and len(ecg_test_page.data) > 3:
+                        # For -aVR, use filtered inverted aVR data
+                        raw_data = ecg_test_page.data[3]
+                        # Use dynamically calculated target_samples
+                        target_samples = extra_ii_samples if (lead == "II" and y_pos == 90) else current_num_samples
+                        # Check if we have enough samples, otherwise use all available
+                        if len(raw_data) >= target_samples:
+                            raw_data = raw_data[-target_samples:]
+                        # Check if data is not all zeros or flat
+                        if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                            # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
+                            real_ecg_data = np.array(raw_data)
+                            real_data_available = True
+                            actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                            if is_demo_mode and time_window_seconds is not None:
                                 pass
-                        elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
+                            else:
+                                time_window_str = f"{calculated_time_window:.2f}s" if calculated_time_window else "auto"
+                        else:
+                            pass
+                    elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                             # Get filtered real data for this lead
                             lead_index = lead_to_index[lead]
                             if len(ecg_test_page.data[lead_index]) > 0:
                                 raw_data = ecg_test_page.data[lead_index]
+                                # Use dynamically calculated target_samples
+                                target_samples = extra_ii_samples if (lead == "II" and y_pos == 90) else current_num_samples
                                 # Check if we have enough samples, otherwise use all available
-                                if len(raw_data) >= num_samples_to_capture:
-                                    raw_data = raw_data[-num_samples_to_capture:]
+                                if len(raw_data) >= target_samples:
+                                    raw_data = raw_data[-target_samples:]
                                 # Check if data has variation (not all zeros or flat line)
                                 if len(raw_data) > 0 and np.std(raw_data) > 0.01:
                                     # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
@@ -2403,9 +2445,20 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     # Column 2 leads keep original position
                     adjusted_x_pos = x_pos
                 
-                from reportlab.lib.units import mm as _mm_units
-                gap = _mm_units if (lead in column1_leads) else 0
-                t = np.linspace(adjusted_x_pos + gap, adjusted_x_pos + ecg_width, len(real_ecg_data))
+                # NEW LOGIC: Use time * speed * scale to align with 5.25mm boxes
+                # 25mm/s speed, scaled by ECG_SPEED_SCALE (1.05) to match 5.25mm boxes
+                # result: 1 second = 5 boxes = 26.25mm (exactly aligned with grid)
+                fs = float(computed_sampling_rate)
+                t_sec = np.arange(len(real_ecg_data)) / fs
+                
+                # Calculate X points in points (1/72 inch)
+                # adjusted_x_pos is the starting point in the master drawing
+                # Add 1mm gap (same as 4:3 format)
+                gap_points = mm # 1mm gap
+                t = adjusted_x_pos + gap_points + (t_sec * wave_speed_mm_s * ECG_SPEED_SCALE * mm)
+                
+                print(f" Lead {lead}: Using diagnostic time scaling - {wave_speed_mm_s} mm/s * {ECG_SPEED_SCALE:.2f} scale")
+                print(f"   X range: {t[0]:.1f} to {t[-1]:.1f} (points)")
                 
                 
                 # Step 1: Convert ADC data to numpy array
@@ -2491,10 +2544,7 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 actual_span_points = actual_max_y - actual_min_y
                 actual_span_boxes = actual_span_points / box_height_points
                 
-                # Start path
                 ecg_path.moveTo(t[0], ecg_normalized[0])
-                
-                # Add ALL points
                 for i in range(1, len(t)):
                     ecg_path.lineTo(t[i], ecg_normalized[i])
                 
@@ -2565,7 +2615,7 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 
                 # Draw flat line at center (baseline)
                 flat_line_start_x = x_pos + 15.0  # Same start as real data
-                flat_line_end_x = x_pos + 33 * ECG_LARGE_BOX_MM * mm  # Same end as real data
+                flat_line_end_x = x_pos + 100  # Default end position
                 flat_line_y = center_y  # Center/baseline position
                 
                 flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
@@ -2763,14 +2813,19 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         boxes_offset = centered_adc / adc_per_box
         
         # Convert to Y position
-        from reportlab.lib.units import mm
-        box_height_points = 5.0 * mm  # Standard ECG: 5mm = 14.17 points per box (same as original)
+        # IMPORTANT: Use ECG_LARGE_BOX_MM (5.25mm) to match the grid
+        box_height_points = ECG_LARGE_BOX_MM * mm
         center_y_notch = extra_lead_ii_y + (extra_lead_ii_height / 2.0)
         center_y_wave = center_y_notch
         ecg_normalized = center_y_wave + (boxes_offset * box_height_points)
         
-        from reportlab.lib.units import mm as _mm_units
-        t = np.linspace(extra_lead_ii_adjusted_x_pos + _mm_units, extra_lead_ii_adjusted_x_pos + extra_lead_ii_width_points, len(extra_lead_ii_data))
+        # NEW LOGIC: Use time * speed * scale for perfect R-R alignment
+        fs = float(computed_sampling_rate)
+        t_sec = np.arange(len(extra_lead_ii_data)) / fs
+        
+        # Calculate X points with 1mm gap
+        gap_points = mm # 1mm gap
+        t = extra_lead_ii_adjusted_x_pos + gap_points + (t_sec * wave_speed_mm_s * ECG_SPEED_SCALE * mm)
         
         # Draw ECG strip
         from reportlab.graphics.shapes import Path
@@ -2780,10 +2835,8 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                                  strokeLineCap=1,
                                  strokeLineJoin=1)
         
-        # Move to first point
+        # Render trim for extra Lead II to suppress residual edge artifacts
         extra_lead_ii_path.moveTo(t[0], ecg_normalized[0])
-        
-        # Draw all points
         for i in range(1, len(t)):
             extra_lead_ii_path.lineTo(t[i], ecg_normalized[i])
         
@@ -3874,5 +3927,3 @@ def generate_6_2_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
 
 
 # ====================  REPORT WRAPPER 6_2 ====================
-# Duplicate clear
-
