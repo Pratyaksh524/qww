@@ -177,8 +177,8 @@ def apply_ac_filter(signal: np.ndarray, sampling_rate: float, ac_filter: str) ->
         
         # Design notch filter (bandstop filter)
         nyquist = sampling_rate / 2.0
-        quality_factor = 10.0  # INFO FIX #12: Increased from 25 to 35 for sharper rejection
-        # Quality factor for notch filter (reduced from 30 to avoid ringing)
+        quality_factor = 5.0  # Reduced from 10 to minimize ringing and transients
+        # Quality factor for notch filter (lower Q = less ringing, faster transient response)
         
         # Normalize frequency
         w0 = notch_freq / nyquist
@@ -188,17 +188,19 @@ def apply_ac_filter(signal: np.ndarray, sampling_rate: float, ac_filter: str) ->
             print(f" AC filter frequency {notch_freq}Hz is invalid for sampling rate {sampling_rate}Hz")
             return signal
         
-        # Design IIR notch filter
+        # Design IIR notch filter and convert to SOS for numerical stability
         b, a = iirnotch(w0, quality_factor)
+        from scipy.signal import tf2sos, sosfiltfilt
+        sos = tf2sos(b, a)
         
-        # Apply filter (zero-phase filtering) with edge padding to reduce start/end transients
-        pad_len = min(len(signal) // 2, int(sampling_rate)) if len(signal) > 0 else 0
+        # Apply filter (zero-phase) with reflect padding to minimize transients
+        pad_len = min(len(signal) // 3, int(2 * sampling_rate)) if len(signal) > 0 else 0
         if pad_len > 0:
-            padded = np.pad(signal, (pad_len, pad_len), mode="edge")
-            filtered_padded = filtfilt(b, a, padded)
+            padded = np.pad(signal, (pad_len, pad_len), mode="reflect")
+            filtered_padded = sosfiltfilt(sos, padded)
             filtered_signal = filtered_padded[pad_len:-pad_len]
         else:
-            filtered_signal = filtfilt(b, a, signal)
+            filtered_signal = sosfiltfilt(sos, signal)
         
         return filtered_signal
     
@@ -703,4 +705,3 @@ def apply_ecg_filters_from_settings(
         emg_filter=emg_filter,
         dft_filter=dft_filter
     )
-

@@ -13,6 +13,20 @@ import sys
 import json
 import matplotlib.pyplot as plt  
 import matplotlib
+import os
+import logging
+from datetime import datetime
+
+# Setup logging for edge trimming debugging
+log_dir = "/Users/indresh/Desktop/2_mar/logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"4_3_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+logging.basicConfig(filename=log_file, level=logging.DEBUG, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+logging.getLogger().addHandler(console_handler)
+
 import numpy as np
 
 # ------------------------ ECG grid scale constants ------------------------
@@ -20,10 +34,12 @@ import numpy as np
 ECG_BASE_BOX_MM = 5.0
 ECG_LARGE_BOX_MM = 210.0 / 40.0
 ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0
+# Column width for 4x3 layout: 3 columns of 17.5 boxes each (total 18 boxes per column budget)
+COLUMN_BOXES = 17.5
 # Scale wave speed so 1 second equals 5 large boxes at 25 mm/s on 40-box grid
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
-FOUR_THREE_SAMPLES_COLUMN = 2000
-FOUR_THREE_SAMPLES_EXTRA_II = 5500
+FOUR_THREE_SAMPLES_COLUMN = 1750  # 17.5 boxes * 100 samples per box (at 500Hz/5boxes_per_sec)
+FOUR_THREE_SAMPLES_EXTRA_II = 5100 # 51 boxes
 
 # matplotlib.use('Agg') # Removed to prevent main thread Qt canvas corruption
 
@@ -205,13 +221,13 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     """
     Calculate optimal time window based on BPM and wave_speed
     
-    Important: Report ECG graph width = 33 boxes × ECG_LARGE_BOX_MM
+    Important: Report ECG graph width = 17.5 boxes × ECG_LARGE_BOX_MM
      wave_speed time calculate factor use :
         Time from wave_speed = (graph_width_mm / effective_wave_speed_mm_s) seconds
     
     Formula:
         - Time window = (graph_width_mm / effective_wave_speed_mm_s) seconds ONLY
-          ( 33 boxes × ECG_LARGE_BOX_MM total width)
+          ( 17.5 boxes × ECG_LARGE_BOX_MM total width)
         - BPM window is NOT used - only wave speed window
         - Beats = (BPM / 60) × time_window
         - Final window clamped maximum 20 seconds (NO minimum clamp)
@@ -219,9 +235,9 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     Returns: (time_window_seconds, num_samples)
     """
     # Calculate time window from wave_speed ONLY (BPM window NOT used)
-    # Report ECG graph width = 33 boxes × ECG_LARGE_BOX_MM
+    # Report ECG graph width = 17.5 boxes × ECG_LARGE_BOX_MM
     # Time = Distance / Speed (scaled for 40-box grid)
-    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+    ecg_graph_width_mm = COLUMN_BOXES * ECG_LARGE_BOX_MM
     effective_wave_speed_mm_s = wave_speed_mm_s * ECG_SPEED_SCALE
     calculated_time_window = ecg_graph_width_mm / max(1e-6, effective_wave_speed_mm_s)
     
@@ -237,7 +253,7 @@ def calculate_time_window_from_bpm_and_wave_speed(hr_bpm, wave_speed_mm_s, desir
     expected_beats = beats_per_second * calculated_time_window
     
     print(f" Time Window Calculation (Wave Speed ONLY):")
-    print(f"   Graph Width: {ecg_graph_width_mm:.2f}mm (33 boxes × {ECG_LARGE_BOX_MM:.2f}mm)")
+    print(f"   Graph Width: {ecg_graph_width_mm:.2f}mm (17.5 boxes × {ECG_LARGE_BOX_MM:.2f}mm)")
     print(f"   Wave Speed: {wave_speed_mm_s}mm/s (effective {effective_wave_speed_mm_s:.2f}mm/s)")
     print(f"   Time Window: {ecg_graph_width_mm:.2f} / {effective_wave_speed_mm_s:.2f} = {calculated_time_window:.2f}s")
     print(f"   BPM: {hr_bpm} → Beats per second: {hr_bpm}/60 = {beats_per_second:.2f} beats/sec")
@@ -264,11 +280,18 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
         fs = float(sampling_rate)
     except Exception:
         fs = 500.0
-    pad_seconds = 2.0
+    try:
+        win_sec = float(str(settings_manager.get_setting("report_window_seconds", "10")).strip() or "10")
+    except Exception:
+        win_sec = 10.0
+    window_samples = int(max(1.0, win_sec) * fs)
+    if arr.size > window_samples:
+        arr = arr[-window_samples:]
+    pad_seconds = 4.0
     pad_samples = int(pad_seconds * fs)
     pad = min(pad_samples, max(0, arr.size - 1))
     if pad > 0:
-        work = np.pad(arr, pad_width=pad, mode="edge")
+        work = np.pad(arr, pad_width=pad, mode="reflect")
     else:
         work = arr
     dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
@@ -288,14 +311,75 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
     try:
         if filtered.size > 5:
             from scipy.ndimage import gaussian_filter1d
-            filtered = gaussian_filter1d(filtered, sigma=0.8)
+            filtered = gaussian_filter1d(filtered, sigma=0.3)
+    except Exception:
+        pass
+    try:
+        n = filtered.size
+        if n > 50:
+            edge_len = max(50, int(0.10 * n))
+            mid_start = n // 3
+            mid_end = (2 * n) // 3
+            start_std = np.std(np.diff(filtered[:edge_len]))
+            end_std = np.std(np.diff(filtered[-edge_len:]))
+            mid_std = np.std(np.diff(filtered[mid_start:mid_end])) + 1e-6
+            start_trim = int(0.05 * n) if start_std > 1.5 * mid_std else 0
+            end_trim = int(0.05 * n) if end_std > 1.5 * mid_std else 0
+            if start_trim + end_trim < n - 20:
+                filtered = filtered[start_trim:n - end_trim]
+    except Exception:
+        pass
+    try:
+        if filtered.size > 5:
+            dif = np.diff(filtered, prepend=filtered[0])
+            th = 5.0 * (np.std(dif) + 1e-6)
+            bad = np.where(np.abs(dif) > th)[0]
+            for i in bad:
+                if 1 <= i < filtered.size - 1:
+                    filtered[i] = 0.5 * (filtered[i - 1] + filtered[i + 1])
     except Exception:
         pass
     if pad > 0 and filtered.size > 2 * pad:
         filtered = filtered[pad:-pad]
+    try:
+        n2 = filtered.size
+        if n2 > 50:
+            edge_len2 = max(50, int(0.10 * n2))
+            mid_start2 = n2 // 3
+            mid_end2 = (2 * n2) // 3
+            start_std2 = np.std(np.diff(filtered[:edge_len2]))
+            end_std2 = np.std(np.diff(filtered[-edge_len2:]))
+            mid_std2 = np.std(np.diff(filtered[mid_start2:mid_end2])) + 1e-6
+            start_trim2 = int(0.05 * n2) if start_std2 > 1.3 * mid_std2 else 0
+            end_trim2 = int(0.05 * n2) if end_std2 > 1.3 * mid_std2 else 0
+            if start_trim2 + end_trim2 < n2 - 20:
+                filtered = filtered[start_trim2:n2 - end_trim2]
+    except Exception:
+        pass
+    try:
+        n3 = filtered.size
+        if n3 > 100:
+            hard_trim = max(10, int(0.03 * n3))
+            filtered = filtered[hard_trim:n3 - hard_trim]
+    except Exception:
+        pass
+    try:
+        n4 = filtered.size
+        if n4 > 50:
+            alpha = 0.5
+            m = max(10, int((alpha * n4) / 2.0))
+            if m * 2 < n4:
+                ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, m)))
+                w = np.ones(n4)
+                w[:m] = ramp
+                w[-m:] = ramp[::-1]
+                mu = float(np.mean(filtered))
+                filtered = mu + (filtered - mu) * w
+    except Exception:
+        pass
     return filtered
 
-def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
+def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2, sampling_rate=500.0):
     """
     Create ECG graph with pink grid background and dark ECG waveform
     Returns: matplotlib figure with pink ECG grid background
@@ -318,47 +402,69 @@ def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
     ax.set_facecolor(bg_color)         # Axes background pink
     
     # STEP 2: Draw pink ECG grid lines
-    # Minor grid lines (1mm equivalent spacing) - LIGHT PINK
-    minor_spacing_x = width / 60  # 60 minor divisions across width
-    minor_spacing_y = height / 20  # 20 minor divisions across height
+    # ECG grid colors (even lighter pink/red like medical ECG paper)
+    light_grid_color = '#ffd1d1'  # Darker minor grid
+    major_grid_color = '#ffb3b3'  # Darker major grid
+    bg_color = '#ffe6e6'  # Very light pink background
+    
+    # Set both figure and axes background to pink
+    fig.patch.set_facecolor(bg_color)  # Figure background pink
+    ax.set_facecolor(bg_color)         # Axes background pink
+    
+    # Minor grid lines (scaled for 40-box grid)
+    minor_spacing = ECG_SMALL_BOX_MM
     
     # Draw vertical minor pink grid lines
-    for i in range(61):
-        x_pos = i * minor_spacing_x
+    num_minor_x = int(width / minor_spacing) + 1
+    for i in range(num_minor_x):
+        x_pos = i * minor_spacing
         ax.axvline(x=x_pos, color=light_grid_color, linewidth=0.6, alpha=0.8)
     
     # Draw horizontal minor pink grid lines
-    for i in range(21):
-        y_pos = i * minor_spacing_y
+    num_minor_y = int(height / minor_spacing) + 1
+    for i in range(num_minor_y):
+        y_pos = i * minor_spacing
         ax.axhline(y=y_pos, color=light_grid_color, linewidth=0.6, alpha=0.8)
     
-    # Major grid lines (5mm equivalent spacing) - DARKER PINK
-    major_spacing_x = width / 12  # 12 major divisions across width
-    major_spacing_y = height / 4   # 4 major divisions across height
+    # Major grid lines (ECG_LARGE_BOX_MM spacing)
+    major_spacing = ECG_LARGE_BOX_MM
     
     # Draw vertical major pink grid lines
-    for i in range(13):
-        x_pos = i * major_spacing_x
+    num_major_x = int(width / major_spacing) + 1
+    for i in range(num_major_x):
+        x_pos = i * major_spacing
         ax.axvline(x=x_pos, color=major_grid_color, linewidth=1.0, alpha=0.9)
     
     # Draw horizontal major pink grid lines
-    for i in range(5):
-        y_pos = i * major_spacing_y
+    num_major_y = int(height / major_spacing) + 1
+    for i in range(num_major_y):
+        y_pos = i * major_spacing
         ax.axhline(y=y_pos, color=major_grid_color, linewidth=1.0, alpha=0.9)
     
     # STEP 3: Plot DARK ECG waveform on top of pink grid
     if ecg_data is not None and len(ecg_data) > 0:
-        # Scale ECG data to fit in the grid
-        t = np.linspace(0, width, len(ecg_data))
-        # Normalize ECG data to fit in height with some margin
-        if np.max(ecg_data) != np.min(ecg_data):
-            ecg_normalized = ((ecg_data - np.min(ecg_data)) / (np.max(ecg_data) - np.min(ecg_data))) * (height * 0.8) + (height * 0.1)
+        # Scale ECG data to fit in the grid (25mm/s * SCALE)
+        fs = float(sampling_rate)
+        t_sec = np.arange(len(ecg_data)) / fs
+        x_mm = t_sec * 25.0 * ECG_SPEED_SCALE
+        
+        # Limit to width
+        mask = x_mm <= width
+        x_plot = x_mm[mask]
+        data_plot = np.array(ecg_data)[mask]
+        
+        # Normalize amplitude CONSISTENTLY (10mm/mV standard)
+        med_abs = np.nanmedian(np.abs(data_plot)) if len(data_plot) else 0.0
+        # Consistent amplitude normalization for all leads
+        if med_abs > 500:
+            ecg_mv = (data_plot - 2000.0) / 6400.0  # Raw ADC to mV conversion
         else:
-            ecg_normalized = np.full_like(ecg_data, height / 2)
+            ecg_mv = data_plot  # Already in mV
+            
+        y_mm = (height / 2.0) + (ecg_mv * 10.0)
         
         # DARK ECG LINE - clearly visible on pink grid
-        ax.plot(t, ecg_normalized, color='#000000', linewidth=2.8, solid_capstyle='round', alpha=0.9)
-    # REMOVE ENTIRE else BLOCK - just comment it out or delete lines 78-96
+        ax.plot(x_plot, y_mm, color='#000000', linewidth=2.8, solid_capstyle='round', alpha=0.9)
     
     # STEP 4: Set axis limits to match grid
     ax.set_xlim(0, width)
@@ -391,43 +497,53 @@ def create_reportlab_ecg_drawing(lead_name, width=460, height=45):
     bg_rect = Rect(0, 0, width, height, fillColor=bg_color, strokeColor=None)
     drawing.add(bg_rect)
     
-    # STEP 2: Draw pink ECG grid lines (even lighter colors)
+    # STEP 2: Draw pink ECG grid lines (GE/Philips fixed diagnostic scale)
+    # Fixed diagnostic grid requirements:
+    # Minor: 0.04s / 0.1mV (1mm at 25mm/s, 10mm/mV)
+    # Major: 0.20s / 1.0mV (5mm at 25mm/s, 10mm/mV)
     light_grid_color = colors.HexColor("#ffd1d1")  # Darker minor grid
     major_grid_color = colors.HexColor("#ffb3b3")   # Darker major grid
     
-    # Minor grid lines (1mm spacing equivalent)
-    minor_spacing_x = width / 60  # 60 divisions across width
-    minor_spacing_y = height / 20  # 20 divisions across height
+    from reportlab.lib.units import mm
     
-    # Vertical minor grid lines
-    for i in range(61):
-        x_pos = i * minor_spacing_x
-        line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
-        drawing.add(line)
+    # Minor grid: 1mm spacing
+    minor_spacing_mm = 1.0 * mm
     
-    # Horizontal minor grid lines
-    for i in range(21):
-        y_pos = i * minor_spacing_y
-        line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
-        drawing.add(line)
+    # Vertical minor lines
+    num_minor_x = int(width / minor_spacing_mm) + 1
+    for i in range(num_minor_x):
+        x_pos = i * minor_spacing_mm
+        if x_pos <= width:
+            line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
+            drawing.add(line)
     
-    # Major grid lines (5mm spacing equivalent)
-    major_spacing_x = width / 12  # 12 divisions across width
-    major_spacing_y = height / 4   # 4 divisions across height
+    # Horizontal minor lines
+    num_minor_y = int(height / minor_spacing_mm) + 1
+    for i in range(num_minor_y):
+        y_pos = i * minor_spacing_mm
+        if y_pos <= height:
+            line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
+            drawing.add(line)
     
-    # Vertical major grid lines
-    for i in range(13):
-        x_pos = i * major_spacing_x
-        line = Line(x_pos, 0, x_pos, height, strokeColor=major_grid_color, strokeWidth=0.8)
-        drawing.add(line)
+    # Major grid: 5mm horizontal, 10mm vertical
+    major_spacing_x_mm = 5.0 * mm
+    major_spacing_y_mm = 10.0 * mm
     
-    # Horizontal major grid lines
-    for i in range(5):
-        y_pos = i * major_spacing_y
-        line = Line(0, y_pos, width, y_pos, strokeColor=major_grid_color, strokeWidth=0.8)
-        drawing.add(line)
+    # Vertical major lines
+    num_major_x = int(width / major_spacing_x_mm) + 1
+    for i in range(num_major_x):
+        x_pos = i * major_spacing_x_mm
+        if x_pos <= width:
+            line = Line(x_pos, 0, x_pos, height, strokeColor=major_grid_color, strokeWidth=0.8)
+            drawing.add(line)
     
-    # REMOVE ENTIRE "STEP 3: Draw ECG waveform as series of lines" section (lines ~166-214)
+    # Horizontal major lines (every 1.0mV = 10mm)
+    num_major_y = int(height / major_spacing_y_mm) + 1
+    for i in range(num_major_y):
+        y_pos = i * major_spacing_y_mm
+        if y_pos <= height:
+            line = Line(0, y_pos, width, y_pos, strokeColor=major_grid_color, strokeWidth=0.8)
+            drawing.add(line)
     
     return drawing
 
@@ -461,73 +577,44 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
         "V1": 6, "V2": 7, "V3": 8, "V4": 9, "V5": 10, "V6": 11
     }
     
-    # Check if demo mode is active and get time window for filtering
-    is_demo_mode = False
+    # FORCE REAL DATA ONLY - DISABLE DEMO MODE FOR REPORTS
+    is_demo_mode = False  # Always use real data for reports
     time_window_seconds = None
-    samples_per_second = samples_per_second or 150
+    print(" 4_3 REPORT GENERATION: Using REAL data only (Demo mode disabled for consistency)")
     
-    if ecg_test_page and hasattr(ecg_test_page, 'demo_toggle'):
-        is_demo_mode = ecg_test_page.demo_toggle.isChecked()
-        if is_demo_mode:
-            # Get time window from demo manager
-            if hasattr(ecg_test_page, 'demo_manager') and ecg_test_page.demo_manager:
-                time_window_seconds = getattr(ecg_test_page.demo_manager, 'time_window', None)
-                samples_per_second = getattr(ecg_test_page.demo_manager, 'samples_per_second', 150)
-                print(f" DEMO MODE ON - Wave speed window: {time_window_seconds}s, Sampling rate: {samples_per_second}Hz")
-            else:
-                # Fallback: calculate from wave speed setting
-                try:
-                    from utils.settings_manager import SettingsManager
-                    sm = SettingsManager()
-                    wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
-                    effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
-                    time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
-                    print(f" DEMO MODE ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
-                except Exception as e:
-                    print(f" Could not get demo time window: {e}")
-                    time_window_seconds = None
+    # Try to get ACTUAL sampling rate from the test page
+    if ecg_test_page and hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler, 'sampling_rate'):
+        if ecg_test_page.sampler.sampling_rate:
+            samples_per_second = float(ecg_test_page.sampler.sampling_rate)
+            print(f" Found sampler sampling rate: {samples_per_second}Hz")
+    elif ecg_test_page and hasattr(ecg_test_page, 'sampling_rate'):
+        if ecg_test_page.sampling_rate:
+            samples_per_second = float(ecg_test_page.sampling_rate)
+            print(f" Found page sampling rate: {samples_per_second}Hz")
+    
+    samples_per_second = samples_per_second or 500.0 # Default to 500Hz for diagnostic accuracy
     # Try to get REAL ECG data from the test page
     real_ecg_data = {}
     if ecg_test_page and hasattr(ecg_test_page, 'data'):
         
-        # Calculate number of samples to capture based on demo mode
-        if is_demo_mode and time_window_seconds is not None:
-            # In demo mode: only capture data visible in one window frame
-            num_samples_to_capture = int(time_window_seconds * samples_per_second)
-            print(f" DEMO MODE: Capturing only {num_samples_to_capture} samples ({time_window_seconds}s window)")
-        else:
-            # Normal mode: capture maximum data (10 seconds or 10000 points, whichever is smaller)
-            num_samples_to_capture = 10000
-            print(f" NORMAL MODE: Capturing up to {num_samples_to_capture} samples")
+        # ALWAYS USE REAL DATA - No demo mode windowing
+        num_samples_to_capture = 10000
+        print(f" REAL DATA MODE: Capturing up to {num_samples_to_capture} samples from live buffer")
         
         for lead in ordered_leads:
             if lead == "-aVR":
                 # For -aVR, we need to invert aVR data
                 if hasattr(ecg_test_page, 'data') and len(ecg_test_page.data) > 3:
                     avr_data = np.array(ecg_test_page.data[3])  # aVR is at index 3
-                    if is_demo_mode and time_window_seconds is not None:
-                        # Demo mode: only capture window frame data
-                        real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
-                        print(f" Captured DEMO -aVR data: {len(real_ecg_data[lead])} points ({time_window_seconds}s window)")
-                    else:
-                        # Normal mode: capture maximum data
-                        real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
-                        print(f" Captured REAL -aVR data: {len(real_ecg_data[lead])} points")
+                    real_ecg_data[lead] = -avr_data[-num_samples_to_capture:]
+                    print(f" Captured REAL -aVR data: {len(real_ecg_data[lead])} points")
             else:
                 lead_index = lead_to_index.get(lead)
                 if lead_index is not None and len(ecg_test_page.data) > lead_index:
                     lead_data = np.array(ecg_test_page.data[lead_index])
                     if len(lead_data) > 0:
-                        if is_demo_mode and time_window_seconds is not None:
-                            # Demo mode: only capture window frame data
-                            real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
-                            print(f" Captured DEMO {lead} data: {len(real_ecg_data[lead])} points ({time_window_seconds}s window)")
-                        else:
-                            # Normal mode: capture maximum data
-                            real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
-                            print(f" Captured REAL {lead} data: {len(real_ecg_data[lead])} points")
+                        real_ecg_data[lead] = lead_data[-num_samples_to_capture:]
+                        print(f" Captured REAL {lead} data: {len(real_ecg_data[lead])} points")
                     else:
                         print(f" No data found for {lead}")
                 else:
@@ -535,41 +622,28 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
     else:
         print(" No live ECG test page found - using grid only")
     
-    # Get wave_gain from settings_manager for amplitude scaling
-    wave_gain_mm_mv = 10.0  # Default
+    # Get wave_gain from settings_manager for amplitude scaling (FULLY DYNAMIC)
+    wave_gain_mm_mv = None
     if settings_manager:
         try:
-            wave_gain_setting = settings_manager.get_setting("wave_gain", "10")
-            wave_gain_mm_mv = float(wave_gain_setting) if wave_gain_setting else 10.0
+            wave_gain_setting = settings_manager.get_setting("wave_gain")
+            wave_gain_mm_mv = float(wave_gain_setting) if wave_gain_setting else None
             print(f" Using wave_gain from ecg_settings.json: {wave_gain_mm_mv} mm/mV (for amplitude scaling)")
         except Exception:
-            wave_gain_mm_mv = 10.0
-            print(f" Could not get wave_gain from settings, using default: {wave_gain_mm_mv} mm/mV")
+            wave_gain_mm_mv = None
+            print(f" Could not get wave_gain from settings")
+    
+    if wave_gain_mm_mv is None:
+        print(" ERROR: wave_gain not found in settings - cannot generate report")
+        return {}
     
     # Apply report filters (AC/EMG/DFT) based on current settings
-    filtered_ecg_data = real_ecg_data
-    try:
-        from ecg.ecg_filters import apply_dft_filter, apply_emg_filter, apply_ac_filter
-        dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
-        emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
-        ac_setting = str(settings_manager.get_setting("filter_ac", "50")).strip()
-        filtered_ecg_data = {}
-        for lead, signal in real_ecg_data.items():
-            if signal is None or len(signal) == 0:
-                filtered_ecg_data[lead] = signal
-                continue
-            filtered = signal
-            if dft_setting not in ("off", ""):
-                filtered = apply_dft_filter(filtered, float(samples_per_second), dft_setting)
-            if emg_setting not in ("off", ""):
-                filtered = apply_emg_filter(filtered, float(samples_per_second), emg_setting)
-            if ac_setting in ("50", "60"):
-                filtered = apply_ac_filter(filtered, float(samples_per_second), ac_setting)
-            filtered_ecg_data[lead] = filtered
-        print(f" Applied report filters: DFT={dft_setting}, EMG={emg_setting}, AC={ac_setting}")
-    except Exception as e:
-        print(f" Could not apply report filters: {e}")
-        filtered_ecg_data = real_ecg_data
+    filtered_ecg_data = {}
+    for lead, signal in real_ecg_data.items():
+        try:
+            filtered_ecg_data[lead] = apply_report_ecg_filters(signal, samples_per_second, settings_manager)
+        except Exception:
+            filtered_ecg_data[lead] = signal
 
     # Create ReportLab drawings with REAL (filtered) data
     for lead in ordered_leads:
@@ -580,7 +654,9 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
                 filtered_ecg_data.get(lead), 
                 width=460, 
                 height=45,
-                wave_gain_mm_mv=wave_gain_mm_mv
+                wave_gain_mm_mv=wave_gain_mm_mv,
+                sampling_rate=samples_per_second,
+                settings_manager=settings_manager
             )
             lead_drawings[lead] = drawing
             
@@ -617,15 +693,25 @@ ADC_PER_BOX_CONFIG = {
     '-aVR': 6400.0,  # For Cabrera sequence
 }
 
-def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, height=45, wave_gain_mm_mv=10.0):
+def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, height=45, wave_gain_mm_mv=None, sampling_rate=500.0, settings_manager=None):
     """
-    Create ECG drawing using ReportLab with REAL ECG data showing MAXIMUM heartbeats
-    Returns: ReportLab Drawing with guaranteed pink background and REAL ECG waveform
+    Create ECG drawing using ReportLab with REAL ECG data (GE/Philips fixed diagnostic scale).
+    
+    Fixed diagnostic scale requirements:
+    - Speed = 25 mm/s (no autoscale)
+    - Gain = 10 mm/mV (no autoscale)
+    - Grid: Minor 0.04s/0.1mV, Major 0.20s/1.0mV
+    - Doctor must be able to count squares
     
     Parameters:
-        wave_gain_mm_mv: Wave gain in mm/mV (default: 10.0 mm/mV)
-                         Used for amplitude scaling: 10mm/mV = 1.0x, 20mm/mV = 2.0x, 5mm/mV = 0.5x
+        wave_gain_mm_mv: Wave gain in mm/mV (MUST be 10.0 for diagnostic reports)
+        sampling_rate: The sampling rate of the ECG data (e.g., 500.0 or 150.0)
     """
+    # VALIDATION: Ensure fixed diagnostic scale
+    # (Allowing some flexibility but warning if not 10.0)
+    if abs(wave_gain_mm_mv - 10.0) > 0.1:
+        print(f"⚠️ Warning: Report using non-standard gain {wave_gain_mm_mv} mm/mV")
+    
     drawing = Drawing(width, height)
     
     # STEP 1: Create solid pink background rectangle
@@ -633,91 +719,153 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
     bg_rect = Rect(0, 0, width, height, fillColor=bg_color, strokeColor=None)
     drawing.add(bg_rect)
     
-    # STEP 2: Draw pink ECG grid lines (even lighter colors)
+    # STEP 2: Draw pink ECG grid lines (GE/Philips fixed diagnostic scale)
+    # Fixed diagnostic grid requirements:
+    # Minor: 0.04s / 0.1mV
+    # Major: 0.20s / 1.0mV
+    # At 25 mm/s: 0.04s = 1mm, 0.20s = 5mm
+    # NOTE: On this 40-box grid, we scale the boxes to ECG_LARGE_BOX_MM
     light_grid_color = colors.HexColor("#ffd1d1")  # Darker minor grid
     major_grid_color = colors.HexColor("#ffb3b3")   # Darker major grid
     
-    # Minor grid lines (1mm spacing equivalent)
-    minor_spacing_x = width / 60  # 60 divisions across width
-    minor_spacing_y = height / 20  # 20 divisions across height
+    from reportlab.lib.units import mm
     
-    # Vertical minor grid lines
-    for i in range(61):
-        x_pos = i * minor_spacing_x
-        line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
-        drawing.add(line)
+    # Minor grid: 1/5 of a large box
+    minor_spacing_mm = ECG_SMALL_BOX_MM
+    minor_spacing_x_points = minor_spacing_mm * mm
+    minor_spacing_y_points = minor_spacing_mm * mm
     
-    # Horizontal minor grid lines
-    for i in range(21):
-        y_pos = i * minor_spacing_y
-        line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
-        drawing.add(line)
-    
-    # Major grid lines (5mm spacing equivalent)
-    major_spacing_x = width / 12  # 12 divisions across width
-    major_spacing_y = height / 4   # 4 divisions across height
-    
-    # Vertical major grid lines
-    for i in range(13):
-        x_pos = i * major_spacing_x
-        line = Line(x_pos, 0, x_pos, height, strokeColor=major_grid_color, strokeWidth=0.8)
-        drawing.add(line)
-    
-    # Horizontal major grid lines
-    for i in range(5):
-        y_pos = i * major_spacing_y
-        line = Line(0, y_pos, width, y_pos, strokeColor=major_grid_color, strokeWidth=0.8)
-        drawing.add(line)
-    
-    # STEP 3: Draw ALL AVAILABLE ECG data - NO DOWNSAMPLING, NO LIMITS!
-    if ecg_data is not None and len(ecg_data) > 0:
-        print(f" Drawing ALL AVAILABLE ECG data for {lead_name}: {len(ecg_data)} points (NO LIMITS)")
-        
-        # SIMPLE APPROACH: Use ALL available data points - NO cutting, NO downsampling
-        # This will show as many heartbeats as possible in the available data
-        
-        # Create time array for ALL the data
-        t = np.linspace(0, width, len(ecg_data))
-        
-        
-        # Get lead-specific ADC per box multiplier (default: 6400)
-        adc_per_box_multiplier = ADC_PER_BOX_CONFIG.get(lead_name, 6400.0)
-        
-        # Convert to numpy array
-        adc_data = np.array(ecg_data, dtype=float)
-        
-        # Apply baseline 2000 (subtract baseline from ADC values)
-        baseline_adc = 2000.0
-        centered_adc = adc_data - baseline_adc
-        
-        # Calculate ADC per box based on wave_gain and lead-specific multiplier
-        adc_per_box = adc_per_box_multiplier / max(1e-6, wave_gain_mm_mv)  # Avoid division by zero
-        
-        # Convert ADC offset to boxes (vertical units)
-        # Direct calculation: boxes_offset = centered_adc / adc_per_box
-        boxes_offset = centered_adc / adc_per_box
-        
-        # Convert boxes to Y position
-        center_y = height / 2.0  # Center of the graph in points
-        box_height_points = 5.0  # 1 box = 5mm = 5 points
-        
-        # Convert boxes offset to Y position
-        ecg_normalized = center_y + (boxes_offset * box_height_points)
-        
-        # Draw ALL ECG data points - NO REDUCTION
-        ecg_color = colors.HexColor("#000000")  # Black ECG line
-        
-        # OPTIMIZED: Draw every point for maximum detail
-        for i in range(len(t) - 1):
-            line = Line(t[i], ecg_normalized[i], 
-                       t[i+1], ecg_normalized[i+1], 
-                       strokeColor=ecg_color, strokeWidth=0.5)
+    # Vertical minor lines
+    num_minor_x = int(width / minor_spacing_x_points) + 1
+    for i in range(num_minor_x):
+        x_pos = i * minor_spacing_x_points
+        if x_pos <= width:
+            line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
             drawing.add(line)
-        
-        print(f" Drew ALL {len(ecg_data)} ECG data points for {lead_name} - showing MAXIMUM heartbeats!")
-    else:
-        print(f" No real data available for {lead_name} - showing grid only")
     
+    # Horizontal minor lines
+    num_minor_y = int(height / minor_spacing_y_points) + 1
+    for i in range(num_minor_y):
+        y_pos = i * minor_spacing_y_points
+        if y_pos <= height:
+            line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
+            drawing.add(line)
+    
+    # Major grid: ECG_LARGE_BOX_MM spacing
+    major_spacing_x_mm = ECG_LARGE_BOX_MM * mm
+    major_spacing_y_mm = ECG_LARGE_BOX_MM * mm
+    
+    # Vertical major lines
+    num_major_x = int(width / major_spacing_x_mm) + 1
+    for i in range(num_major_x):
+        x_pos = i * major_spacing_x_mm
+        if x_pos <= width:
+            line = Line(x_pos, 0, x_pos, height, strokeColor=major_grid_color, strokeWidth=0.8)
+            drawing.add(line)
+    
+    # Horizontal major lines
+    num_major_y = int(height / major_spacing_y_mm) + 1
+    for i in range(num_major_y):
+        y_pos = i * major_spacing_y_mm
+        if y_pos <= height:
+            line = Line(0, y_pos, width, y_pos, strokeColor=major_grid_color, strokeWidth=0.8)
+            drawing.add(line)
+    
+    # STEP 3: Plot ECG in fixed diagnostic scale (25 mm/s, 10 mm/mV) with scaling for 40-box grid
+    if ecg_data is None or len(ecg_data) == 0:
+        print(f" No real data available for {lead_name} - showing grid only")
+        return drawing
+
+    # Fixed scale parameters - DYNAMIC wave_speed from settings
+    if settings_manager:
+        try:
+            wave_speed_setting = settings_manager.get_setting("wave_speed")
+            speed_mm_s = float(wave_speed_setting) if wave_speed_setting else None
+        except Exception:
+            speed_mm_s = None
+    
+    if speed_mm_s is None:
+        print(" ERROR: wave_speed not found in settings - cannot generate drawing")
+        return drawing
+        
+    width_mm = width / mm  # Convert width points to mm
+    total_seconds = width_mm / (speed_mm_s * ECG_SPEED_SCALE)
+    height_mm_physical = height / mm  # Convert height points to mm
+
+    ecg_array = np.asarray(ecg_data, dtype=float)
+    
+    # ORIGINAL WORKING APPROACH: Simple amplitude normalization like ecg_report_generator.py
+    med_abs = np.nanmedian(np.abs(ecg_array)) if len(ecg_array) else 0.0
+    if med_abs > 20.0:  # Use 20.0 threshold like ecg_report_generator.py
+        ecg_mv = ecg_array / 1000.0  # Simple division by 1000
+    else:
+        ecg_mv = ecg_array  # Already in mV
+    
+    # FORCEFUL STRAIGHTENING: Force straight baseline - no exceptions
+    if len(ecg_mv) > 0:
+        # Remove DC offset first
+        dc_offset = np.nanmean(ecg_mv)  # Use mean for gentler removal
+        ecg_mv = ecg_mv - dc_offset
+        
+        # FORCEFUL STRAIGHTENING: Always remove any slope
+        if len(ecg_mv) > 20:
+            x = np.arange(len(ecg_mv))
+            # Fit linear trend - ALWAYS remove it regardless of slope
+            coeffs = np.polyfit(x, ecg_mv, 1)  # Linear fit
+            slope = coeffs[0]
+            trend = np.polyval(coeffs, x)
+            ecg_mv = ecg_mv - trend  # ALWAYS remove trend - no threshold
+            print(f" {lead_name}: FORCEFUL: Removed slope={slope:.6f} (no threshold)")
+            
+            # ADDITIONAL: Force first and last 10 samples to zero
+            edge_samples = 10
+            if len(ecg_mv) > edge_samples * 2:
+                ecg_mv[:edge_samples] = 0  # Force start to zero
+                ecg_mv[-edge_samples:] = 0  # Force end to zero
+                print(f" {lead_name}: FORCEFUL: Forced {edge_samples} start/end samples to zero")
+    
+    # ORIGINAL WORKING GAIN: Calculate y_mm AFTER slope removal
+    y_mm = ecg_mv * wave_gain_mm_mv
+    baseline_mm = height_mm_physical / 2.0
+    y_mm = baseline_mm + y_mm
+    
+    # PROPER ECG TIME WINDOWING: Use fixed time window instead of scaling
+    # This ensures medically accurate beat representation
+    effective_speed_mm_s = speed_mm_s * ECG_SPEED_SCALE
+    max_display_seconds = width_mm / effective_speed_mm_s
+    max_samples = int(max_display_seconds * fs)
+    
+    # Take only the data that fits in the time window (no scaling distortion)
+    if len(t_sec) > max_samples:
+        display_t_sec = t_sec[:max_samples]
+        display_ecg_mv = ecg_mv[:max_samples]
+        print(f" Time window: showing {max_samples} samples ({max_display_seconds:.2f}s) of {len(ecg_mv)} available")
+    else:
+        display_t_sec = t_sec
+        display_ecg_mv = ecg_mv
+        print(f" Full data fits: {len(display_ecg_mv)} samples ({len(display_ecg_mv)/fs:.2f}s)")
+    
+    # Convert to physical mm positions (no scaling - medically accurate)
+    x_mm = display_t_sec * effective_speed_mm_s
+    
+    # Update variables for the rest of the processing
+    t_sec = display_t_sec
+    ecg_mv = display_ecg_mv
+
+    # Clip to panel
+    y_mm = np.clip(y_mm, 0.0, height_mm_physical)
+    x_mm = np.clip(x_mm, 0.0, width_mm)
+
+    # Convert to points for plotting
+    ecg_color = colors.HexColor("#000000")
+    for i in range(len(x_mm) - 1):
+        x1 = x_mm[i] * mm
+        y1 = y_mm[i] * mm
+        x2 = x_mm[i+1] * mm
+        y2 = y_mm[i+1] * mm
+        drawing.add(Line(x1, y1, x2, y2, strokeColor=ecg_color, strokeWidth=0.6))
+    
+    print(f" Drew {len(x_mm)} ECG data points for {lead_name} in fixed diagnostic scale at {fs}Hz")
     return drawing
 
 def create_clean_ecg_image(lead_name, width=6, height=2):
@@ -750,32 +898,34 @@ def create_clean_ecg_image(lead_name, width=6, height=2):
     light_grid_color = '#ffd1d1'  # Darker minor grid
     major_grid_color = '#ffb3b3'  # Darker major grid
     
-    # Minor grid lines (1mm equivalent spacing)
-    minor_spacing_x = width / 60  # 60 minor divisions
-    minor_spacing_y = height / 20  # 20 minor divisions
+    # Minor grid lines (scaled for 40-box grid)
+    minor_spacing = ECG_SMALL_BOX_MM
     
     # Draw vertical minor pink grid lines
-    for i in range(61):
-        x_pos = i * minor_spacing_x
+    num_minor_x = int(width / minor_spacing) + 1
+    for i in range(num_minor_x):
+        x_pos = i * minor_spacing
         ax.axvline(x=x_pos, color=light_grid_color, linewidth=0.6, alpha=0.8)
     
     # Draw horizontal minor pink grid lines
-    for i in range(21):
-        y_pos = i * minor_spacing_y
+    num_minor_y = int(height / minor_spacing) + 1
+    for i in range(num_minor_y):
+        y_pos = i * minor_spacing
         ax.axhline(y=y_pos, color=light_grid_color, linewidth=0.6, alpha=0.8)
     
-    # Major grid lines (5mm equivalent spacing)
-    major_spacing_x = width / 12  # 12 major divisions
-    major_spacing_y = height / 4   # 4 major divisions
+    # Major grid lines (ECG_LARGE_BOX_MM spacing)
+    major_spacing = ECG_LARGE_BOX_MM
     
     # Draw vertical major pink grid lines
-    for i in range(13):
-        x_pos = i * major_spacing_x
+    num_major_x = int(width / major_spacing) + 1
+    for i in range(num_major_x):
+        x_pos = i * major_spacing
         ax.axvline(x=x_pos, color=major_grid_color, linewidth=1.0, alpha=0.9)
     
     # Draw horizontal major pink grid lines
-    for i in range(5):
-        y_pos = i * major_spacing_y
+    num_major_y = int(height / major_spacing) + 1
+    for i in range(num_major_y):
+        y_pos = i * major_spacing
         ax.axhline(y=y_pos, color=major_grid_color, linewidth=1.0, alpha=0.9)
     
     # REMOVE ENTIRE "STEP 3: Create realistic ECG waveform" section (lines ~315-356)
@@ -901,16 +1051,12 @@ def _draw_logo_and_footer_callback(canvas, doc_obj, patient=None):
     if canvas.getPageNumber() == 1:
         page_width, page_height = canvas._pagesize
         
-        # ========== 57 BOXES IN FULL 297MM PAGE WIDTH ==========
-        # Page width: 297mm (full A4 landscape)
-        # Number of boxes: 57
-        # Box size: 297mm / 57 = 5.2105mm per box
-        num_boxes_width = 57
-        page_width_mm = 297.0
-        box_width_mm = page_width_mm / num_boxes_width  # 297/57 = 5.2105mm per box
-        box_width_pts = box_width_mm * mm
+        # ========== CONSISTENT 5.25MM BOXES (40 BOXES IN 210MM) ==========
+        # Using ECG_LARGE_BOX_MM (5.25mm) for both width and height grid
+        box_size_mm = ECG_LARGE_BOX_MM  # 5.25mm
+        box_size_pts = box_size_mm * mm
         
-        # Pink background - FULL PAGE (297mm width, no white space)
+        # Pink background - FULL PAGE
         canvas.setFillColor(colors.HexColor("#ffe6e6"))
         canvas.rect(0, 0, page_width, page_height, fill=1, stroke=0)
         
@@ -918,48 +1064,38 @@ def _draw_logo_and_footer_callback(canvas, doc_obj, patient=None):
         light_grid_color = colors.HexColor("#ffd1d1")
         major_grid_color = colors.HexColor("#ffb3b3")
         
-        # Minor grid lines - 5 minor boxes per major box (scaled proportionally)
-        # Width: 57 boxes across 297mm → 5.2105mm per box → minor = 1.042mm
-        # Height: 40 boxes across 210mm → 5.25mm per box → minor = 1.05mm
-        minor_spacing_mm = box_width_mm / 5.0  # 1.042mm per minor division
+        # Minor grid lines - 5 minor boxes per major box
+        minor_spacing_mm = box_size_mm / 5.0  # 1.05mm
         minor_spacing_pts = minor_spacing_mm * mm
         
         canvas.setStrokeColor(light_grid_color)
-        canvas.setLineWidth(0.6)  # Minor grid lines (1mm spacing) - keep original thickness
-        # Vertical minor lines - full page width (297mm)
+        canvas.setLineWidth(0.6)
+        # Vertical minor lines
         x = 0
         while x <= page_width:
             canvas.line(x, 0, x, page_height)
             x += minor_spacing_pts
-            if x > page_width:
-                break
         
-        # Horizontal minor lines - 5 minor boxes per major box
-        # Use proportional spacing to match 40 major boxes across 210mm height.
-        num_boxes_height = 40
-        page_height_mm = 210.0
-        box_height_mm = page_height_mm / num_boxes_height  # 210/40 = 5.25mm per box
-        minor_spacing_y = (box_height_mm / 5.0) * mm
+        # Horizontal minor lines
         y = 0
         while y <= page_height:
             canvas.line(0, y, page_width, y)
-            y += minor_spacing_y
+            y += minor_spacing_pts
         
-        # Major grid lines - exactly 57 boxes across full 297mm width
+        # Major grid lines
         canvas.setStrokeColor(major_grid_color)
-        canvas.setLineWidth(0.6)  # Thinner major grid lines (5mm spacing) - was 1.2
-        # Vertical major lines - 57 boxes (297mm width, 5.2105mm per box)
+        canvas.setLineWidth(0.6)
+        # Vertical major lines
         x = 0
-        for i in range(num_boxes_width + 1):  # 58 lines for 57 boxes
+        while x <= page_width:
             canvas.line(x, 0, x, page_height)
-            x += box_width_pts
+            x += box_size_pts
         
-        # Horizontal major lines - 40 boxes (210mm height, 5.25mm per box)
-        box_height_pts = box_height_mm * mm
+        # Horizontal major lines
         y = 0
-        for i in range(num_boxes_height + 1):  # 41 lines for 40 boxes
+        while y <= page_height:
             canvas.line(0, y, page_width, y)
-            y += box_height_pts
+            y += box_size_pts
     
     # STEP 1.5: Draw Org. and Phone No. on Page 1 (REPOSITIONED - slightly higher, more left)
     if canvas.getPageNumber() == 1:
@@ -1088,23 +1224,9 @@ def _draw_logo_and_footer_callback(canvas, doc_obj, patient=None):
 def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, dashboard_instance=None, ecg_test_page=None, patient=None, ecg_data_file=None):
     """
     Generate ECG report PDF
-    
-    Parameters:
-        ecg_data_file: Optional path to saved ECG data file. 
-                       If provided, will load from file instead of live ecg_test_page.
-                       If None and ecg_test_page provided, will save data first.
-    
-    Example:
-        # Option 1: Save data first, then generate report
-        saved_file = save_ecg_data_to_file(ecg_test_page)
-        generate_ecg_report("report.pdf", data=metrics, ecg_test_page=ecg_test_page, ecg_data_file=saved_file)
-        
-        # Option 2: Generate report and auto-save data
-        generate_ecg_report("report.pdf", data=metrics, ecg_test_page=ecg_test_page)
-        # Data will be automatically saved before report generation
     """
-   
-   
+    from reportlab.lib.units import mm
+    
     # Main function body starts here
     if data is None:
         # When no device connected or demo off - show ZERO values (not dummy values)
@@ -1176,22 +1298,40 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         data["RR_ms"] = data.get("RR_ms", 0)
 
     # ==================== STEP 2: Get wave_speed from ecg_settings.json (PRIORITY) ====================
-    # Priority: ecg_settings.json  wave_speed  (calculation-based beats  )
-    wave_speed_setting = settings_manager.get_setting("wave_speed", "25")
-    wave_gain_setting = settings_manager.get_setting("wave_gain", "10")
-    wave_speed_mm_s = _safe_float(wave_speed_setting, 25.0)  # Default: 25.0 mm/s
-    wave_gain_mm_mv = _safe_float(wave_gain_setting, 10.0)   # Default: 10.0 mm/mV
+    # Priority: ecg_settings.json wave_speed (FULLY DYNAMIC)
+    wave_speed_setting = settings_manager.get_setting("wave_speed")
+    wave_gain_setting = settings_manager.get_setting("wave_gain")
+    
+    if wave_speed_setting is None or wave_gain_setting is None:
+        print(" ERROR: wave_speed or wave_gain not found in settings - cannot generate report")
+        return None
+        
+    wave_speed_mm_s = _safe_float(wave_speed_setting, None)   # No default - must be in settings
+    wave_gain_mm_mv = _safe_float(wave_gain_setting, None)    # No default - must be in settings
+    
+    if wave_speed_mm_s is None or wave_gain_mm_mv is None:
+        print(" ERROR: Invalid wave_speed or wave_gain values - cannot generate report")
+        return None
+        
     print(f" Using wave_speed from ecg_settings.json: {wave_speed_mm_s} mm/s (for calculation-based beats)")
-    computed_sampling_rate = 500
+    
+    # Try to get sampling rate from the test page first
+    computed_sampling_rate = 500.0
+    if ecg_test_page and hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler, 'sampling_rate'):
+        if ecg_test_page.sampler.sampling_rate:
+            computed_sampling_rate = float(ecg_test_page.sampler.sampling_rate)
+    elif ecg_test_page and hasattr(ecg_test_page, 'sampling_rate'):
+        if ecg_test_page.sampling_rate:
+            computed_sampling_rate = float(ecg_test_page.sampling_rate)
 
     data["wave_speed_mm_s"] = wave_speed_mm_s
     data["wave_gain_mm_mv"] = wave_gain_mm_mv
 
     print(f" Pre-plot checks: HR_bpm={hr_bpm_value}, RR_ms={data['RR_ms']}, wave_speed={wave_speed_mm_s}mm/s, wave_gain={wave_gain_mm_mv}mm/mV, sampling_rate={computed_sampling_rate}Hz")
     print(f" Calculation-based beats formula:")
-    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+    ecg_graph_width_mm = COLUMN_BOXES * ECG_LARGE_BOX_MM
     effective_wave_speed_mm_s = wave_speed_mm_s * ECG_SPEED_SCALE
-    print(f"   Graph width: 33 boxes × {ECG_LARGE_BOX_MM:.2f}mm = {ecg_graph_width_mm:.2f}mm")
+    print(f"   Graph width: 17.5 boxes × {ECG_LARGE_BOX_MM:.2f}mm = {ecg_graph_width_mm:.2f}mm")
     print(f"   BPM window: (desired_beats × 60) / {hr_bpm_value} = {(6 * 60.0 / hr_bpm_value) if hr_bpm_value > 0 else 0:.2f}s")
     print(f"   Wave speed window: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {ecg_graph_width_mm / max(1e-6, effective_wave_speed_mm_s):.2f}s")
     
@@ -1209,7 +1349,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         saved_ecg_data = load_ecg_data_from_file(ecg_data_file)
         if saved_ecg_data:
             # Override sampling rate from saved data
-            computed_sampling_rate = 500
+            computed_sampling_rate = saved_ecg_data.get('sampling_rate', computed_sampling_rate)
             print(f" Using sampling rate from provided file: {computed_sampling_rate} Hz")
     elif ecg_test_page and hasattr(ecg_test_page, 'data'):
         # ALWAYS save current data to file before generating report (REQUIRED for calculation-based beats)
@@ -1218,7 +1358,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         if saved_data_file_path:
             saved_ecg_data = load_ecg_data_from_file(saved_data_file_path)
             if saved_ecg_data:
-                computed_sampling_rate = 500
+                computed_sampling_rate = saved_ecg_data.get('sampling_rate', computed_sampling_rate)
                 print(f" Using sampling rate from saved file: {computed_sampling_rate} Hz")
             else:
                 print(" Warning: Could not load saved ECG data file")
@@ -1424,8 +1564,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     # Patient info, vital parameters and conclusions are now in master drawing above ECG graph
     print("Creating SINGLE drawing with all ECG content...")
     
+    # Column width based on 17.5 boxes (data) + 0.5 boxes (gap) = 18 boxes total budget
+    COLUMN_WIDTH_PTS = 18 * ECG_LARGE_BOX_MM * mm
+    
     # Single drawing dimensions - ADJUSTED HEIGHT to fit within page frame (max ~770)
-    total_width = 780   # Full page width
+    total_width = 3 * COLUMN_WIDTH_PTS + 20   # Full width for 3 columns + small margin
     total_height = 540  # Reduced to 720 to fit within page frame (max ~770) with margin
     
     # Create ONE master drawing
@@ -1448,17 +1591,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 345
             })
         elif lead == "II":
-            # Lead II at position 274, same row as Lead I
+            # Lead II at COLUMN_WIDTH_PTS, same row as Lead I
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from Lead I (259+15)
+                "x": COLUMN_WIDTH_PTS,  # 18 boxes gap from Lead I
                 "y": 345   # Same y as Lead I
             })
         elif lead == "III":
-            # Lead III at position 548, same row as Lead I
+            # Lead III at 2 * COLUMN_WIDTH_PTS, same row as Lead I
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from Lead II (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  # 36 boxes gap from Lead I
                 "y": 345   # Same y as Lead I
             })
         elif lead == "aVR":
@@ -1469,17 +1612,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 280
             })
         elif lead == "aVL":
-            # aVL at position 274, same row as aVR
+            # aVL at COLUMN_WIDTH_PTS, same row as aVR
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from aVR (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 280   # Same y as aVR
             })
         elif lead == "aVF":
-            # aVF at position 548, same row as aVR
+            # aVF at 2 * COLUMN_WIDTH_PTS, same row as aVR
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from aVL (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 280   # Same y as aVR
             })
         elif lead == "V1":
@@ -1490,17 +1633,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 215
             })
         elif lead == "V2":
-            # V2 at position 274, same row as V1
+            # V2 at COLUMN_WIDTH_PTS, same row as V1
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from V1 (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 215   # Same y as V1
             })
         elif lead == "V3":
-            # V3 at position 548, same row as V1
+            # V3 at 2 * COLUMN_WIDTH_PTS, same row as V1
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from V2 (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 215   # Same y as V1
             })
         elif lead == "V4":
@@ -1511,17 +1654,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 150
             })
         elif lead == "V5":
-            # V5 at position 274, same row as V4
+            # V5 at COLUMN_WIDTH_PTS, same row as V4
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from V4 (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 150   # Same y as V4
             })
         elif lead == "V6":
-            # V6 at position 548, same row as V4
+            # V6 at 2 * COLUMN_WIDTH_PTS, same row as V4
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from V5 (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 150   # Same y as V4
             })
     
@@ -1535,14 +1678,14 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     })
     
     # Draw vertical dotted lines to separate columns
-    # First column line (x=274) for Lead I, aVR, V1, V4
+    # First column line (COLUMN_WIDTH_PTS) for Lead I, aVR, V1, V4
     from reportlab.graphics.shapes import Line
     from reportlab.lib.colors import black
-    first_column_line = Line(274, 158, 274, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
+    first_column_line = Line(COLUMN_WIDTH_PTS, 158, COLUMN_WIDTH_PTS, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
     master_drawing.add(first_column_line)
     
-    # Second column line (x=548) for Lead II, aVL, V2, V5
-    second_column_line = Line(548, 158, 548, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
+    # Second column line (2 * COLUMN_WIDTH_PTS) for Lead II, aVL, V2, V5
+    second_column_line = Line(2 * COLUMN_WIDTH_PTS, 158, 2 * COLUMN_WIDTH_PTS, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
     master_drawing.add(second_column_line)
     
     # STEP 3: Draw ALL ECG content directly in master drawing
@@ -1567,8 +1710,8 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (17.5 boxes)
+                    ecg_graph_width_mm = COLUMN_BOXES * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" Report Generator: Demo mode ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -1589,7 +1732,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         # Normal mode: Calculate time window based on wave_speed ONLY (NEW LOGIC)
         # This ensures proper number of beats are displayed based on graph width
         # Formula: 
-        #   - Time window = graph_width / effective_wave_speed ONLY (33 boxes × ECG_LARGE_BOX_MM)
+        #   - Time window = graph_width / effective_wave_speed ONLY (17.5 boxes × ECG_LARGE_BOX_MM)
         #   - BPM window is NOT used - only wave speed determines time window
         #   - Beats = (BPM / 60) × time_window
         #   - Maximum clamp: 20 seconds (NO minimum clamp)
@@ -1620,11 +1763,27 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                               fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
             master_drawing.add(lead_label)
 
-            # Determine per-lead sample window
-            if lead == "II" and y_pos == 90:
-                target_samples = FOUR_THREE_SAMPLES_EXTRA_II
+            # Determine per-lead sample window based on wave speed
+            # NEW LOGIC: 
+            #   If wave_speed == 50.0: Use HALF samples (875/2550) to fit in 17.5/51 boxes
+            #   If wave_speed == 25.0: Use FULL samples (1750/5100) to fit in 17.5/51 boxes
+            #   If wave_speed == 12.5: Use FULL samples (1750/5100) which will take HALF width (8.75/25.5 boxes)
+            if abs(wave_speed_mm_s - 50.0) < 0.1:
+                # 50 mm/s mode -> Half number of samples to stay within 17.5/51 boxes
+                if lead == "II" and y_pos == 90:
+                    target_samples = FOUR_THREE_SAMPLES_EXTRA_II // 2  # 2550 samples -> 17.5 boxes at 50mm/s
+                else:
+                    target_samples = FOUR_THREE_SAMPLES_COLUMN // 2    # 875 samples -> 17.5 boxes at 50mm/s
+                print(f" Wave speed 50.0 mm/s detected (LOOP 1): Using half-samples ({target_samples}) to fit in 17.5 boxes")
             else:
-                target_samples = FOUR_THREE_SAMPLES_COLUMN
+                # 25.0 or 12.5 mm/s mode -> Full samples (1750/5100)
+                # At 25.0: 1750 samples = 3.5s = 17.5 boxes
+                # At 12.5: 1750 samples = 3.5s = 8.75 boxes
+                if lead == "II" and y_pos == 90:
+                    target_samples = FOUR_THREE_SAMPLES_EXTRA_II
+                else:
+                    target_samples = FOUR_THREE_SAMPLES_COLUMN
+                print(f" Wave speed {wave_speed_mm_s} mm/s detected (LOOP 1): Using full-samples ({target_samples})")
 
             if is_demo_mode and time_window_seconds is not None:
                 lead_time_window_seconds = time_window_seconds
@@ -1662,73 +1821,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 else:
                     return None
             
-            # Priority 1: Use saved_ecg_data (REQUIRED for calculation-based beats)
-            saved_data_samples = 0  # Initialize for comparison with live data
-            if saved_ecg_data and 'leads' in saved_ecg_data:
-                # For calculated leads, calculate from I and II
-                if lead in ["III", "aVR", "aVL", "aVF", "-aVR"]:
-                    if "I" in saved_ecg_data['leads'] and "II" in saved_ecg_data['leads']:
-                        lead_i_data = saved_ecg_data['leads']["I"]
-                        lead_ii_data = saved_ecg_data['leads']["II"]
-                        
-                        # Ensure same length
-                        min_len = min(len(lead_i_data), len(lead_ii_data))
-                        lead_i_data = lead_i_data[:min_len]
-                        lead_ii_data = lead_ii_data[:min_len]
-                        
-                        # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
-                        # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
-                        lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
-                        lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
-                        
-                        # Calculate derived lead from centered values
-                        calculated_data = calculate_derived_lead(lead, lead_i_centered, lead_ii_centered)
-                        if calculated_data is not None:
-                            raw_data = calculated_data.tolist() if isinstance(calculated_data, np.ndarray) else calculated_data
-                            print(f" Calculated {lead} from saved I and II data (baseline-subtracted): {len(raw_data)} points")
-                        else:
-                            # Fallback to saved data if calculation fails
-                            lead_name_for_saved = lead.replace("-aVR", "aVR")
-                            if lead_name_for_saved in saved_ecg_data['leads']:
-                                raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                                if lead == "-aVR":
-                                    raw_data = [-x for x in raw_data]  # Invert for -aVR
-                            else:
-                                raw_data = []
-                    else:
-                        print(f" Cannot calculate {lead}: I or II data missing in saved file")
-                        raw_data = []
-                else:
-                    # For non-calculated leads, use saved data directly
-                    lead_name_for_saved = lead.replace("-aVR", "aVR")  # Handle -aVR case
-                    if lead_name_for_saved in saved_ecg_data['leads']:
-                        raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                        if lead == "-aVR":
-                            raw_data = [-x for x in raw_data]  # Invert for -aVR
-                    else:
-                        raw_data = []
-                
-                if len(raw_data) > 0:
-                    # Check if saved data has enough samples for calculated time window
-                    saved_data_samples = len(raw_data)
-                    if saved_data_samples < lead_samples_to_capture:
-                        print(f" SAVED FILE {lead} has only {saved_data_samples} samples, need {lead_samples_to_capture} for {lead_time_window_seconds:.2f}s window")
-                        print(f"   Will use ALL saved data ({saved_data_samples} samples) - may show fewer beats than calculated")
-                        # Use all available saved data (don't filter)
-                        raw_data_to_use = raw_data
-                    else:
-                        # Apply time window filtering based on calculated window
-                        raw_data_to_use = raw_data[-lead_samples_to_capture:]
-                    
-                    if len(raw_data_to_use) > 0 and np.std(raw_data_to_use) > 0.01:
-                        real_ecg_data = np.array(raw_data_to_use)
-                        real_data_available = True
-                        time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                        actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                        print(f" Using SAVED FILE {lead} data: {len(real_ecg_data)} points (requested: {time_window_str}, actual: {actual_time_window:.2f}s, std: {np.std(real_ecg_data):.2f})")
+            # Priority 1: Use ONLY live dashboard data (ignore saved data completely)
+            real_data_available = False
+            real_ecg_data = None
             
-            # Priority 2: Fallback to live dashboard data (if saved data not available OR has insufficient samples)
+            # Use live dashboard data only
             # Check if live data has MORE samples than saved data
             if ecg_test_page and hasattr(ecg_test_page, 'data'):
                 lead_to_index = {
@@ -1783,21 +1880,33 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                         live_data_samples = len(ecg_test_page.data[lead_to_index[lead]])
                     
-                    # Use live data if: (1) saved data not available OR (2) live data has MORE samples
-                    use_live_data = False
-                    if not real_data_available:
-                        use_live_data = True
-                    elif live_data_samples > saved_data_samples:
-                        use_live_data = True
-                    
-                    if use_live_data:
-                        if lead == "-aVR" and len(ecg_test_page.data) > 3:
-                            # For -aVR, use filtered inverted aVR data
-                            raw_data = ecg_test_page.data[3]
+                    # Always use live dashboard data (ignore any saved data)
+                    if lead == "-aVR" and len(ecg_test_page.data) > 3:
+                        # For -aVR, use filtered inverted aVR data
+                        raw_data = ecg_test_page.data[3]
+                        # Check if we have enough samples, otherwise use all available
+                        if len(raw_data) >= lead_samples_to_capture:
+                            raw_data = raw_data[-lead_samples_to_capture:]
+                        # Check if data is not all zeros or flat
+                        if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                            # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
+                            real_ecg_data = np.array(raw_data)
+                            
+                            real_data_available = True
+                            actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                            if is_demo_mode and time_window_seconds is not None:
+                                pass
+                            else:
+                                time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
+                    elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
+                        # Get filtered real data for this lead
+                        lead_index = lead_to_index[lead]
+                        if len(ecg_test_page.data[lead_index]) > 0:
+                            raw_data = ecg_test_page.data[lead_index]
                             # Check if we have enough samples, otherwise use all available
                             if len(raw_data) >= lead_samples_to_capture:
                                 raw_data = raw_data[-lead_samples_to_capture:]
-                            # Check if data is not all zeros or flat
+                            # Check if data has variation (not all zeros or flat line)
                             if len(raw_data) > 0 and np.std(raw_data) > 0.01:
                                 # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
                                 real_ecg_data = np.array(raw_data)
@@ -1808,31 +1917,6 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                                     pass
                                 else:
                                     time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                            else:
-                                pass
-                        elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
-                            # Get filtered real data for this lead
-                            lead_index = lead_to_index[lead]
-                            if len(ecg_test_page.data[lead_index]) > 0:
-                                raw_data = ecg_test_page.data[lead_index]
-                                # Check if we have enough samples, otherwise use all available
-                                if len(raw_data) >= lead_samples_to_capture:
-                                    raw_data = raw_data[-lead_samples_to_capture:]
-                                # Check if data has variation (not all zeros or flat line)
-                                if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                    # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
-                                    real_ecg_data = np.array(raw_data)
-                                    
-                                    real_data_available = True
-                                    actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                                    if is_demo_mode and time_window_seconds is not None:
-                                        pass
-                                    else:
-                                        time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                                else:
-                                    pass
-                            else:
-                                pass
             
             print(f" DEBUG: real_data_available={real_data_available}, len(real_ecg_data)={len(real_ecg_data) if real_ecg_data is not None else 0} for Lead {lead}")
 
@@ -1840,51 +1924,70 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             if real_data_available and len(real_ecg_data) > 0:
                 # Calculate ECG width based on column position to stop at dotted lines
                 # Special case: Additional Lead II at V4 position (y=90) gets extended width using exact 52-box calculation
-                if lead == "II" and y_pos == 90:
+                # Also Lead I at x_pos=0, y_pos=345 gets same extended width for consistency
+                if (lead == "II" and y_pos == 90) or (lead == "I" and x_pos == 0 and y_pos == 345):
                     # Calculate exact width for 52 boxes to ensure proper R-R intervals
-                    from reportlab.lib.units import mm as _mm_units
                     # 52 boxes × ECG_LARGE_BOX_MM × mm = exact width in points
                     exact_52_box_width = 52 * ECG_LARGE_BOX_MM * mm
                     ecg_width = exact_52_box_width
-                    print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
+                    if lead == "I":
+                        print(f" Lead I: Extended to 52-box width for consistency - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
+                    else:
+                        print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
                 elif x_pos == 0:
-                    # First column: stop at x=274 (dotted line)
-                    ecg_width = 274
-                elif x_pos == 274:
-                    # Second column: stop at x=548 (dotted line)
-                    ecg_width = 274  # 548 - 274 = 274
+                    # First column: stop at COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
+                elif x_pos == COLUMN_WIDTH_PTS:
+                    # Second column: stop at 2 * COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
                 else:
-                    # Third column: use full width (no dotted line after)
-                    ecg_width = 460
+                    # Third column: use COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
                 
                 ecg_height = 45
                 
                 # Create time array for ALL data
-                # Special case: Extra Lead II needs proper time scaling for correct R-R intervals
-                if lead == "II" and y_pos == 90:
-                    # Use same time scaling as regular leads but with extended width
-                    # Calculate proper x position for Extra Lead II
-                    extra_lead_ii_x_pos_calc = 20 - 45
-                    extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
-                    # Create time array using same method as regular leads
-                    t = np.linspace(extra_lead_ii_adjusted_x_pos_calc, extra_lead_ii_adjusted_x_pos_calc + ecg_width, len(real_ecg_data))
-                    print(f" Extra Lead II: Time array from {extra_lead_ii_adjusted_x_pos_calc:.1f} to {extra_lead_ii_adjusted_x_pos_calc + ecg_width:.1f} (width: {ecg_width} points)")
-                else:
-                    # IMPORTANT FIX: Use consistent time scaling for all columns
-                    # All columns should use the same effective width (274 points) for time scaling
-                    # This ensures R-R intervals appear consistent across all columns
-                    effective_width_for_time = 274  # Use same width for time scaling in all columns
-                    t = np.linspace(x_pos, x_pos + effective_width_for_time, len(real_ecg_data))
-                    print(f" Lead {lead}: Using consistent time scaling - width: {effective_width_for_time} points (actual drawing width: {ecg_width} points)")
-                
+                # NEW LOGIC: Use time * speed * scale to align with 5.25mm boxes
+                # 25mm/s speed, scaled by ECG_SPEED_SCALE (1.05) to match 5.25mm boxes
+                # result: 1 second = 5 boxes = 26.25mm (exactly aligned with grid)
+                # Create time array for ALL data (same approach as ecg_report_generator.py)
+                ecg_width = COLUMN_WIDTH_PTS
+                t = np.linspace(x_pos, x_pos + ecg_width, len(real_ecg_data))
                 
                 adc_data = np.array(real_ecg_data, dtype=float)
 
+                # Apply SAME filters as dashboard (AC notch → EMG → DFT → Gaussian)
                 try:
-                    adc_data = apply_report_ecg_filters(adc_data, float(computed_sampling_rate), settings_manager)
+                    from ecg.ecg_filters import apply_ecg_filters
+                    from scipy.ndimage import gaussian_filter1d as _gf1d
+                    
+                    ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
+                    emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
+                    dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    
+                    # Nyquist guard: AC notch at F Hz requires sampling rate > 2*F Hz
+                    if ac_setting in ("50", "60"):
+                        required_fs = float(ac_setting) * 2.0 + 1.0
+                        if float(computed_sampling_rate) <= required_fs:
+                            print(f" AC filter disabled (rate {computed_sampling_rate} Hz too low for {ac_setting} Hz notch)")
+                            ac_setting = "off"
+                    
+                    adc_data = apply_ecg_filters(
+                        signal=adc_data,
+                        sampling_rate=float(computed_sampling_rate),
+                        ac_filter=ac_setting  if ac_setting  not in ("off", "") else None,
+                        emg_filter=emg_setting if emg_setting not in ("off", "") else None,
+                        dft_filter=dft_setting if dft_setting not in ("off", "") else None,
+                    )
+                    
+                    # Light Gaussian smoothing (sigma=0.8 — same as dashboard)
+                    if len(adc_data) > 5:
+                        adc_data = _gf1d(adc_data, sigma=0.8)
+                    
+                    print(f" Applied dashboard filters: AC={ac_setting}, EMG={emg_setting}, DFT={dft_setting} for {lead}")
                 except Exception as filter_err:
-                    print(f" Report filter apply failed for {lead}: {filter_err}")
-                
+                    print(f" Dashboard filter apply failed for {lead}: {filter_err}")
+
                 # DEBUG: Check if data is already processed (baseline-subtracted)
                 # If data range is far from 2000 baseline, it might already be processed
                 data_mean = np.mean(adc_data)
@@ -1923,6 +2026,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 max_centered_adc_abs = np.max(np.abs(centered_adc))
                 expected_boxes = max_centered_adc_abs / adc_per_box
             
+                centered_adc = centered_adc - (float(np.mean(centered_adc)) if centered_adc.size > 0 else 0.0)
+                if centered_adc.size > 20:
+                    x_idx = np.arange(centered_adc.size)
+                    trend = np.polyval(np.polyfit(x_idx, centered_adc, 1), x_idx)
+                    centered_adc = centered_adc - trend
                 boxes_offset = centered_adc / adc_per_box
                 
                 # Log boxes offset for verification
@@ -1931,12 +2039,60 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 center_y = y_pos + (ecg_height / 2.0)  # Center of the graph in points
                 # IMPORTANT: Grid is 40 boxes over 210mm -> 5.25mm per box
                 # 5.25mm = 5.25 * 2.834645669 points = 14.88 points per box
-                from reportlab.lib.units import mm
                 box_height_points = ECG_LARGE_BOX_MM * mm  # Match 40-box height grid (5.25mm)
                 major_spacing_y = box_height_points  # Use 5.25mm spacing
                 
                 # Convert boxes offset to Y position
                 ecg_normalized = center_y + (boxes_offset * box_height_points)
+                
+                try:
+                    from ecg.ecg_filters import apply_baseline_wander_median_mean
+                    local = ecg_normalized - center_y
+                    local = apply_baseline_wander_median_mean(local, 500.0)
+                    ecg_normalized = center_y + local
+                except Exception:
+                    pass
+                
+                try:
+                    idx = np.arange(len(ecg_normalized))
+                    local = ecg_normalized - center_y
+                    trend = np.polyval(np.polyfit(idx, local, 2), idx)
+                    ecg_normalized = center_y + (local - trend)
+                except Exception:
+                    pass
+                try:
+                    local = ecg_normalized - center_y
+                    wl = max(25, int(0.12 * len(local)))
+                    kernel = np.ones(wl) / float(wl)
+                    baseline = np.convolve(local, kernel, mode="same")
+                    ecg_normalized = center_y + (local - baseline)
+                except Exception:
+                    pass
+                edge = max(30, int(0.25 * len(ecg_normalized)))
+                if len(ecg_normalized) > edge * 2:
+                    r = np.sin(np.linspace(0.0, np.pi / 2.0, edge)) ** 2
+                    ecg_normalized[:edge] = center_y + (ecg_normalized[:edge] - center_y) * r
+                    ecg_normalized[-edge:] = center_y + (ecg_normalized[-edge:] - center_y) * r[::-1]
+                clamp = max(10, int(0.05 * len(ecg_normalized)))
+                if len(ecg_normalized) > clamp * 2:
+                    ecg_normalized[:clamp] = center_y
+                    ecg_normalized[-clamp:] = center_y
+                try:
+                    idx = np.arange(len(ecg_normalized))
+                    local = ecg_normalized - center_y
+                    trend = np.polyval(np.polyfit(idx, local, 2), idx)
+                    ecg_normalized = center_y + (local - trend)
+                except Exception:
+                    pass
+                edge = max(20, int(0.12 * len(ecg_normalized)))
+                if len(ecg_normalized) > edge * 2:
+                    r = np.sin(np.linspace(0.0, np.pi / 2.0, edge)) ** 2
+                    ecg_normalized[:edge] = center_y + (ecg_normalized[:edge] - center_y) * r
+                    ecg_normalized[-edge:] = center_y + (ecg_normalized[-edge:] - center_y) * r[::-1]
+                clamp = max(5, int(0.01 * len(ecg_normalized)))
+                if len(ecg_normalized) > clamp * 2:
+                    ecg_normalized[:clamp] = center_y
+                    ecg_normalized[-clamp:] = center_y
                 
                 # DEBUG: Verify Y position calculation
                 
@@ -1955,10 +2111,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 actual_span_points = actual_max_y - actual_min_y
                 actual_span_boxes = actual_span_points / box_height_points
                 
-                # Start path
                 ecg_path.moveTo(t[0], ecg_normalized[0])
-                
-                # Add ALL points
                 for i in range(1, len(t)):
                     ecg_path.lineTo(t[i], ecg_normalized[i])
                 
@@ -1967,7 +2120,6 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 
                 print(f" DEBUG: About to check calibration notch for Lead {lead}")
                 # Calibration notch (only for first column leads with x=0: I, aVR, V1, V4, and additional II)
-                from reportlab.lib.units import mm
                 notch_path = None
                 print(f" DEBUG: Checking notch for Lead {lead} - x_pos={x_pos}, is in first column: {x_pos == 0}")
                 if x_pos == 0:  # Only first column leads (x=0)
@@ -2008,10 +2160,25 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             else:
                 print(f" *** NO DATA CONDITION REACHED for Lead {lead} - showing grid only ***")
                 
+                # Draw flat line when no real data available (like dashboard)
+                from reportlab.lib.units import mm
+                from reportlab.graphics.shapes import Line, Path
+                
+                # Calculate center_y same as real data section
+                ecg_height = 45  # Same as real data section
+                center_y = y_pos + (ecg_height / 2.0)  # Center of graph in points
+                
+                # Draw flat line at center (baseline)
+                flat_line_start_x = x_pos + 15.0  # Same start as real data
+                flat_line_end_x = x_pos + 100  # Default end position
+                flat_line_y = center_y  # Center/baseline position
+                
+                flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
+                              strokeColor=colors.HexColor("#000000"), strokeWidth=1.2)
+                master_drawing.add(flat_line)
+                
                 # Create calibration notch for first column leads even when no data is available
                 print(f" DEBUG: About to check calibration notch for Lead {lead} (no data case)")
-                from reportlab.lib.units import mm
-                from reportlab.graphics.shapes import Path
                 notch_path = None
                 print(f" DEBUG: Checking notch for Lead {lead} - x_pos={x_pos}, is in first column: {x_pos == 0}")
                 if x_pos == 0:  # Only first column leads (x=0)
@@ -2122,8 +2289,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     #  CREATE SINGLE MASSIVE DRAWING with ALL ECG content (NO individual drawings)
     print("Creating SINGLE drawing with all ECG content...")
     
+    # Column width based on 17.5 boxes (data) + 0.5 boxes (gap) = 18 boxes total budget
+    COLUMN_WIDTH_PTS = 18 * ECG_LARGE_BOX_MM * mm
+    
     # Single drawing dimensions - ADJUSTED HEIGHT to fit within page frame (max ~770)
-    total_width = 780   # Full page width
+    total_width = 3 * COLUMN_WIDTH_PTS + 20   # Full width for 3 columns + small margin
     total_height = 520  # Adjusted to fit within landscape frame (555.3 available)
     
     # Create ONE master drawing
@@ -2146,17 +2316,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 345
             })
         elif lead == "II":
-            # Lead II at position 274, same row as Lead I
+            # Lead II at COLUMN_WIDTH_PTS, same row as Lead I
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from Lead I (259+15)
+                "x": COLUMN_WIDTH_PTS,  # 18 boxes gap from Lead I
                 "y": 345   # Same y as Lead I
             })
         elif lead == "III":
-            # Lead III at position 548, same row as Lead I
+            # Lead III at 2 * COLUMN_WIDTH_PTS, same row as Lead I
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from Lead II (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  # 36 boxes gap from Lead I
                 "y": 345   # Same y as Lead I
             })
         elif lead == "aVR":
@@ -2167,17 +2337,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 280
             })
         elif lead == "aVL":
-            # aVL at position 274, same row as aVR
+            # aVL at COLUMN_WIDTH_PTS, same row as aVR
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from aVR (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 280   # Same y as aVR
             })
         elif lead == "aVF":
-            # aVF at position 548, same row as aVR
+            # aVF at 2 * COLUMN_WIDTH_PTS, same row as aVR
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from aVL (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 280   # Same y as aVR
             })
         elif lead == "V1":
@@ -2188,17 +2358,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 215
             })
         elif lead == "V2":
-            # V2 at position 274, same row as V1
+            # V2 at COLUMN_WIDTH_PTS, same row as V1
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from V1 (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 215   # Same y as V1
             })
         elif lead == "V3":
-            # V3 at position 548, same row as V1
+            # V3 at 2 * COLUMN_WIDTH_PTS, same row as V1
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from V2 (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 215   # Same y as V1
             })
         elif lead == "V4":
@@ -2209,17 +2379,17 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 "y": 150
             })
         elif lead == "V5":
-            # V5 at position 274, same row as V4
+            # V5 at COLUMN_WIDTH_PTS, same row as V4
             lead_positions.append({
                 "lead": lead, 
-                "x": 274,  # 274 points gap from V4 (259+15)
+                "x": COLUMN_WIDTH_PTS,  
                 "y": 150   # Same y as V4
             })
         elif lead == "V6":
-            # V6 at position 548, same row as V4
+            # V6 at 2 * COLUMN_WIDTH_PTS, same row as V4
             lead_positions.append({
                 "lead": lead, 
-                "x": 548,  # 274 points gap from V5 (259+15)
+                "x": 2 * COLUMN_WIDTH_PTS,  
                 "y": 150   # Same y as V4
             })
     
@@ -2233,14 +2403,14 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     })
     
     # Draw vertical dotted lines to separate columns
-    # First column line (x=274) for Lead I, aVR, V1, V4
+    # First column line (COLUMN_WIDTH_PTS) for Lead I, aVR, V1, V4
     from reportlab.graphics.shapes import Line
     from reportlab.lib.colors import black
-    first_column_line = Line(274, 158, 274, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
+    first_column_line = Line(COLUMN_WIDTH_PTS, 158, COLUMN_WIDTH_PTS, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
     master_drawing.add(first_column_line)
     
-    # Second column line (x=548) for Lead II, aVL, V2, V5
-    second_column_line = Line(548, 158, 548, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
+    # Second column line (2 * COLUMN_WIDTH_PTS) for Lead II, aVL, V2, V5
+    second_column_line = Line(2 * COLUMN_WIDTH_PTS, 158, 2 * COLUMN_WIDTH_PTS, 377, strokeColor=black, strokeWidth=1, strokeDashArray=[2, 2])
     master_drawing.add(second_column_line)
     
     # STEP 3: Draw ALL ECG content directly in master drawing
@@ -2265,8 +2435,8 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     from utils.settings_manager import SettingsManager
                     sm = SettingsManager()
                     wave_speed = float(sm.get_wave_speed())
-                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (33 boxes)
-                    ecg_graph_width_mm = 33 * ECG_LARGE_BOX_MM
+                    # NEW LOGIC: Time window = graph_width / effective_wave_speed (17.5 boxes)
+                    ecg_graph_width_mm = COLUMN_BOXES * ECG_LARGE_BOX_MM
                     effective_wave_speed_mm_s = wave_speed * ECG_SPEED_SCALE
                     time_window_seconds = ecg_graph_width_mm / effective_wave_speed_mm_s
                     print(f" Report Generator: Demo mode ON - Calculated window using NEW LOGIC: {ecg_graph_width_mm:.2f}mm / {effective_wave_speed_mm_s:.2f}mm/s = {time_window_seconds:.2f}s")
@@ -2287,7 +2457,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
         # Normal mode: Calculate time window based on wave_speed ONLY (NEW LOGIC)
         # This ensures proper number of beats are displayed based on graph width
         # Formula: 
-        #   - Time window = graph_width / effective_wave_speed ONLY (33 boxes × ECG_LARGE_BOX_MM)
+        #   - Time window = graph_width / effective_wave_speed ONLY (17.5 boxes × ECG_LARGE_BOX_MM)
         #   - BPM window is NOT used - only wave speed determines time window
         #   - Beats = (BPM / 60) × time_window
         #   - Maximum clamp: 20 seconds (NO minimum clamp)
@@ -2318,11 +2488,27 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                               fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
             master_drawing.add(lead_label)
 
-            # Determine per-lead sample window
-            if lead == "II" and y_pos == 90:
-                target_samples = FOUR_THREE_SAMPLES_EXTRA_II
+            # Determine per-lead sample window based on wave speed
+            # NEW LOGIC: 
+            #   If wave_speed == 50.0: Use HALF samples (875/2550) to fit in 17.5/51 boxes
+            #   If wave_speed == 25.0: Use FULL samples (1750/5100) to fit in 17.5/51 boxes
+            #   If wave_speed == 12.5: Use FULL samples (1750/5100) which will take HALF width (8.75/25.5 boxes)
+            if abs(wave_speed_mm_s - 50.0) < 0.1:
+                # 50 mm/s mode -> Half number of samples to stay within 17.5/51 boxes
+                if lead == "II" and y_pos == 90:
+                    target_samples = FOUR_THREE_SAMPLES_EXTRA_II // 2  # 2550 samples -> 17.5 boxes at 50mm/s
+                else:
+                    target_samples = FOUR_THREE_SAMPLES_COLUMN // 2    # 875 samples -> 17.5 boxes at 50mm/s
+                print(f" Wave speed 50.0 mm/s detected (LOOP 2): Using half-samples ({target_samples}) to fit in 17.5 boxes")
             else:
-                target_samples = FOUR_THREE_SAMPLES_COLUMN
+                # 25.0 or 12.5 mm/s mode -> Full samples (1750/5100)
+                # At 25.0: 1750 samples = 3.5s = 17.5 boxes
+                # At 12.5: 1750 samples = 3.5s = 8.75 boxes
+                if lead == "II" and y_pos == 90:
+                    target_samples = FOUR_THREE_SAMPLES_EXTRA_II
+                else:
+                    target_samples = FOUR_THREE_SAMPLES_COLUMN
+                print(f" Wave speed {wave_speed_mm_s} mm/s detected (LOOP 2): Using full-samples ({target_samples})")
 
             if is_demo_mode and time_window_seconds is not None:
                 lead_time_window_seconds = time_window_seconds
@@ -2359,73 +2545,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 else:
                     return None
             
-            # Priority 1: Use saved_ecg_data (REQUIRED for calculation-based beats)
-            saved_data_samples = 0  # Initialize for comparison with live data
-            if saved_ecg_data and 'leads' in saved_ecg_data:
-                # For calculated leads, calculate from I and II
-                if lead in ["III", "aVR", "aVL", "aVF", "-aVR"]:
-                    if "I" in saved_ecg_data['leads'] and "II" in saved_ecg_data['leads']:
-                        lead_i_data = saved_ecg_data['leads']["I"]
-                        lead_ii_data = saved_ecg_data['leads']["II"]
-                        
-                        # Ensure same length
-                        min_len = min(len(lead_i_data), len(lead_ii_data))
-                        lead_i_data = lead_i_data[:min_len]
-                        lead_ii_data = lead_ii_data[:min_len]
-                        
-                        # IMPORTANT: Subtract baseline from Lead I and Lead II BEFORE calculating derived leads
-                        # This ensures calculated leads are centered around 0, not around baseline
-                        baseline_adc = 2000.0
-                        lead_i_centered = np.array(lead_i_data, dtype=float) - baseline_adc
-                        lead_ii_centered = np.array(lead_ii_data, dtype=float) - baseline_adc
-                        
-                        # Calculate derived lead from centered values
-                        calculated_data = calculate_derived_lead(lead, lead_i_centered, lead_ii_centered)
-                        if calculated_data is not None:
-                            raw_data = calculated_data.tolist() if isinstance(calculated_data, np.ndarray) else calculated_data
-                            print(f" Calculated {lead} from saved I and II data (baseline-subtracted): {len(raw_data)} points")
-                        else:
-                            # Fallback to saved data if calculation fails
-                            lead_name_for_saved = lead.replace("-aVR", "aVR")
-                            if lead_name_for_saved in saved_ecg_data['leads']:
-                                raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                                if lead == "-aVR":
-                                    raw_data = [-x for x in raw_data]  # Invert for -aVR
-                            else:
-                                raw_data = []
-                    else:
-                        print(f" Cannot calculate {lead}: I or II data missing in saved file")
-                        raw_data = []
-                else:
-                    # For non-calculated leads, use saved data directly
-                    lead_name_for_saved = lead.replace("-aVR", "aVR")  # Handle -aVR case
-                    if lead_name_for_saved in saved_ecg_data['leads']:
-                        raw_data = saved_ecg_data['leads'][lead_name_for_saved]
-                        if lead == "-aVR":
-                            raw_data = [-x for x in raw_data]  # Invert for -aVR
-                    else:
-                        raw_data = []
-                
-                if len(raw_data) > 0:
-                    # Check if saved data has enough samples for calculated time window
-                    saved_data_samples = len(raw_data)
-                    if saved_data_samples < lead_samples_to_capture:
-                        print(f" SAVED FILE {lead} has only {saved_data_samples} samples, need {lead_samples_to_capture} for {lead_time_window_seconds:.2f}s window")
-                        print(f"   Will use ALL saved data ({saved_data_samples} samples) - may show fewer beats than calculated")
-                        # Use all available saved data (don't filter)
-                        raw_data_to_use = raw_data
-                    else:
-                        # Apply time window filtering based on calculated window
-                        raw_data_to_use = raw_data[-lead_samples_to_capture:]
-                    
-                    if len(raw_data_to_use) > 0 and np.std(raw_data_to_use) > 0.01:
-                        real_ecg_data = np.array(raw_data_to_use)
-                        real_data_available = True
-                        time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                        actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                        print(f" Using SAVED FILE {lead} data: {len(real_ecg_data)} points (requested: {time_window_str}, actual: {actual_time_window:.2f}s, std: {np.std(real_ecg_data):.2f})")
+            # Priority 1: Use ONLY live dashboard data (ignore saved data completely)
+            real_data_available = False
+            real_ecg_data = None
             
-            # Priority 2: Fallback to live dashboard data (if saved data not available OR has insufficient samples)
+            # Use live dashboard data only
             # Check if live data has MORE samples than saved data
             if ecg_test_page and hasattr(ecg_test_page, 'data'):
                 lead_to_index = {
@@ -2480,21 +2604,33 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                     elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
                         live_data_samples = len(ecg_test_page.data[lead_to_index[lead]])
                     
-                    # Use live data if: (1) saved data not available OR (2) live data has MORE samples
-                    use_live_data = False
-                    if not real_data_available:
-                        use_live_data = True
-                    elif live_data_samples > saved_data_samples:
-                        use_live_data = True
-                    
-                    if use_live_data:
-                        if lead == "-aVR" and len(ecg_test_page.data) > 3:
-                            # For -aVR, use filtered inverted aVR data
-                            raw_data = ecg_test_page.data[3]
+                    # Always use live dashboard data (ignore any saved data)
+                    if lead == "-aVR" and len(ecg_test_page.data) > 3:
+                        # For -aVR, use filtered inverted aVR data
+                        raw_data = ecg_test_page.data[3]
+                        # Check if we have enough samples, otherwise use all available
+                        if len(raw_data) >= lead_samples_to_capture:
+                            raw_data = raw_data[-lead_samples_to_capture:]
+                        # Check if data is not all zeros or flat
+                        if len(raw_data) > 0 and np.std(raw_data) > 0.01:
+                            # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
+                            real_ecg_data = np.array(raw_data)
+                            
+                            real_data_available = True
+                            actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
+                            if is_demo_mode and time_window_seconds is not None:
+                                pass
+                            else:
+                                time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
+                    elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
+                        # Get filtered real data for this lead
+                        lead_index = lead_to_index[lead]
+                        if len(ecg_test_page.data[lead_index]) > 0:
+                            raw_data = ecg_test_page.data[lead_index]
                             # Check if we have enough samples, otherwise use all available
                             if len(raw_data) >= lead_samples_to_capture:
                                 raw_data = raw_data[-lead_samples_to_capture:]
-                            # Check if data is not all zeros or flat
+                            # Check if data has variation (not all zeros or flat line)
                             if len(raw_data) > 0 and np.std(raw_data) > 0.01:
                                 # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
                                 real_ecg_data = np.array(raw_data)
@@ -2505,31 +2641,6 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                                     pass
                                 else:
                                     time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                            else:
-                                pass
-                        elif lead in lead_to_index and len(ecg_test_page.data) > lead_to_index[lead]:
-                            # Get filtered real data for this lead
-                            lead_index = lead_to_index[lead]
-                            if len(ecg_test_page.data[lead_index]) > 0:
-                                raw_data = ecg_test_page.data[lead_index]
-                                # Check if we have enough samples, otherwise use all available
-                                if len(raw_data) >= lead_samples_to_capture:
-                                    raw_data = raw_data[-lead_samples_to_capture:]
-                                # Check if data has variation (not all zeros or flat line)
-                                if len(raw_data) > 0 and np.std(raw_data) > 0.01:
-                                    # STEP 1: Capture ORIGINAL dashboard data (NO gain applied)
-                                    real_ecg_data = np.array(raw_data)
-                                    
-                                    real_data_available = True
-                                    actual_time_window = len(real_ecg_data) / computed_sampling_rate if computed_sampling_rate > 0 else 0
-                                    if is_demo_mode and time_window_seconds is not None:
-                                        pass
-                                    else:
-                                        time_window_str = f"{lead_time_window_seconds:.2f}s" if lead_time_window_seconds else "auto"
-                                else:
-                                    pass
-                            else:
-                                pass
             
             print(f" DEBUG: real_data_available={real_data_available}, len(real_ecg_data)={len(real_ecg_data) if real_ecg_data is not None else 0} for Lead {lead}")
 
@@ -2537,42 +2648,44 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             if real_data_available and len(real_ecg_data) > 0:
                 # Calculate ECG width based on column position to stop at dotted lines
                 # Special case: Additional Lead II at V4 position (y=90) gets extended width using exact 52-box calculation
-                if lead == "II" and y_pos == 90:
+                # Also Lead I at x_pos=0, y_pos=345 gets same extended width for consistency
+                if (lead == "II" and y_pos == 90) or (lead == "I" and x_pos == 0 and y_pos == 345):
                     # Calculate exact width for 52 boxes to ensure proper R-R intervals
-                    from reportlab.lib.units import mm as _mm_units
                     # 52 boxes × ECG_LARGE_BOX_MM × mm = exact width in points
                     exact_52_box_width = 52 * ECG_LARGE_BOX_MM * mm
                     ecg_width = exact_52_box_width
-                    print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
+                    if lead == "I":
+                        print(f" Lead I: Extended to 52-box width for consistency - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
+                    else:
+                        print(f" Extra Lead II: Exact 52-box width calculation - 52 × {ECG_LARGE_BOX_MM:.2f}mm × mm = {ecg_width:.1f} points")
                 elif x_pos == 0:
-                    # First column: stop at x=274 (dotted line)
-                    ecg_width = 274
-                elif x_pos == 274:
-                    # Second column: stop at x=548 (dotted line)
-                    ecg_width = 274  # 548 - 274 = 274
+                    # First column: stop at COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
+                elif x_pos == COLUMN_WIDTH_PTS:
+                    # Second column: stop at 2 * COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
                 else:
-                    # Third column: use full width (no dotted line after)
-                    ecg_width = 460
+                    # Third column: use COLUMN_WIDTH_PTS
+                    ecg_width = COLUMN_WIDTH_PTS
                 
                 ecg_height = 45
                 
                 # Create time array for ALL data
-                # Special case: Extra Lead II needs proper time scaling for correct R-R intervals
-                if lead == "II" and y_pos == 90:
-                    # Use same time scaling as regular leads but with extended width
-                    # Calculate proper x position for Extra Lead II
-                    extra_lead_ii_x_pos_calc = 20 - 45
-                    extra_lead_ii_adjusted_x_pos_calc = extra_lead_ii_x_pos_calc + 30
-                    # Create time array using same method as regular leads
-                    t = np.linspace(extra_lead_ii_adjusted_x_pos_calc, extra_lead_ii_adjusted_x_pos_calc + ecg_width, len(real_ecg_data))
-                    print(f" Extra Lead II: Time array from {extra_lead_ii_adjusted_x_pos_calc:.1f} to {extra_lead_ii_adjusted_x_pos_calc + ecg_width:.1f} (width: {ecg_width} points)")
-                else:
-                    # IMPORTANT FIX: Use consistent time scaling for all columns
-                    # All columns should use the same effective width (274 points) for time scaling
-                    # This ensures R-R intervals appear consistent across all columns
-                    effective_width_for_time = 274  # Use same width for time scaling in all columns
-                    t = np.linspace(x_pos, x_pos + effective_width_for_time, len(real_ecg_data))
-                    print(f" Lead {lead}: Using consistent time scaling - width: {effective_width_for_time} points (actual drawing width: {ecg_width} points)")
+                # NEW LOGIC: Use time * speed * scale to align with 5.25mm boxes
+                # 25mm/s speed, scaled by ECG_SPEED_SCALE (1.05) to match 5.25mm boxes
+                # result: 1 second = 5 boxes = 26.25mm (exactly aligned with grid)
+                fs = float(computed_sampling_rate)
+                t_sec = np.arange(len(real_ecg_data)) / fs
+                
+                # Calculate X points in points (1/72 inch)
+                # x_pos is the starting point in the master drawing
+                # ADD 1mm (1 minor box) gap at start
+                gap_points = ECG_SMALL_BOX_MM * mm
+                # Use actual wave_speed_mm_s for physical horizontal scaling
+                t = x_pos + gap_points + (t_sec * wave_speed_mm_s * ECG_SPEED_SCALE * mm)
+                
+                print(f" Lead {lead}: Using diagnostic time scaling - {wave_speed_mm_s} mm/s * {ECG_SPEED_SCALE:.2f} scale")
+                print(f"   X range: {t[0]:.1f} to {t[-1]:.1f} (points)")
                 
                 
                 # Step 1: Convert ADC data to numpy array
@@ -2630,6 +2743,11 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 
                 
                 
+                centered_adc = centered_adc - (float(np.mean(centered_adc)) if centered_adc.size > 0 else 0.0)
+                if centered_adc.size > 20:
+                    x_idx = np.arange(centered_adc.size)
+                    trend = np.polyval(np.polyfit(x_idx, centered_adc, 1), x_idx)
+                    centered_adc = centered_adc - trend
                 boxes_offset = centered_adc / adc_per_box
                 
                 # Step 5: Convert boxes to Y position (in mm, then to points)
@@ -2640,6 +2758,22 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 
                 # Convert boxes offset to Y position
                 ecg_normalized = center_y + (boxes_offset * box_height_points)
+                
+                try:
+                    from ecg.ecg_filters import apply_baseline_wander_median_mean
+                    local = ecg_normalized - center_y
+                    local = apply_baseline_wander_median_mean(local, 500.0)
+                    ecg_normalized = center_y + local
+                except Exception:
+                    pass
+                
+                try:
+                    from ecg.ecg_filters import apply_baseline_wander_median_mean
+                    local = ecg_normalized - center_y
+                    local = apply_baseline_wander_median_mean(local, 500.0)
+                    ecg_normalized = center_y + local
+                except Exception:
+                    pass
                 
                 
                 # Draw ALL REAL ECG data points
@@ -2656,10 +2790,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 actual_span_points = actual_max_y - actual_min_y
                 actual_span_boxes = actual_span_points / box_height_points
                 
-                # Start path
                 ecg_path.moveTo(t[0], ecg_normalized[0])
-                
-                # Add ALL points
                 for i in range(1, len(t)):
                     ecg_path.lineTo(t[i], ecg_normalized[i])
                 
@@ -2668,7 +2799,6 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
                 
                 print(f" DEBUG: About to check calibration notch for Lead {lead}")
                 # Calibration notch (only for first column leads with x=0: I, aVR, V1, V4, and additional II)
-                from reportlab.lib.units import mm
                 notch_path = None
                 print(f" DEBUG: Checking notch for Lead {lead} - x_pos={x_pos}, is in first column: {x_pos == 0}")
                 if x_pos == 0:  # Only first column leads (x=0)
@@ -2709,10 +2839,25 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             else:
                 print(f" *** NO DATA CONDITION REACHED for Lead {lead} - showing grid only ***")
                 
+                # Draw flat line when no real data available (like dashboard)
+                from reportlab.lib.units import mm
+                from reportlab.graphics.shapes import Line, Path
+                
+                # Calculate center_y same as real data section
+                ecg_height = 45  # Same as real data section
+                center_y = y_pos + (ecg_height / 2.0)  # Center of graph in points
+                
+                # Draw flat line at center (baseline)
+                flat_line_start_x = x_pos + 15.0  # Same start as real data
+                flat_line_end_x = x_pos + 100  # Default end position
+                flat_line_y = center_y  # Center/baseline position
+                
+                flat_line = Line(flat_line_start_x, flat_line_y, flat_line_end_x, flat_line_y,
+                              strokeColor=colors.HexColor("#000000"), strokeWidth=1.2)
+                master_drawing.add(flat_line)
+                
                 # Create calibration notch for first column leads even when no data is available
                 print(f" DEBUG: About to check calibration notch for Lead {lead} (no data case)")
-                from reportlab.lib.units import mm
-                from reportlab.graphics.shapes import Path
                 notch_path = None
                 print(f" DEBUG: Checking notch for Lead {lead} - x_pos={x_pos}, is in first column: {x_pos == 0}")
                 if x_pos == 0:  # Only first column leads (x=0)
@@ -2871,9 +3016,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
 
     if (p_amp_mv<=0 or qrs_amp_mv<=0 or t_amp_mv<=0) and ecg_test_page is not None and hasattr(ecg_test_page,'data'):
         try:
-            fs = 250.0
-            if hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler,'sampling_rate') and ecg_test_page.sampler.sampling_rate:
-                fs = float(ecg_test_page.sampler.sampling_rate)
+            fs = float(computed_sampling_rate)
             arr = None
             if len(ecg_test_page.data)>1:
                 lead_ii = ecg_test_page.data[1]
@@ -2902,9 +3045,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
             lead_aVF = ecg_test_page.data[5] if len(ecg_test_page.data) > 5 else None
             
             # Get sampling rate
-            fs = 250.0
-            if hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler, 'sampling_rate') and ecg_test_page.sampler.sampling_rate:
-                fs = float(ecg_test_page.sampler.sampling_rate)
+            fs = float(computed_sampling_rate)
             
             if lead_I is not None and lead_aVF is not None:
                 # Convert to numpy arrays
@@ -3244,9 +3385,7 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     if (rv5_amp<=0 or sv1_amp==0.0) and ecg_test_page is not None and hasattr(ecg_test_page,'data'):
         try:
             from scipy.signal import butter, filtfilt, find_peaks
-            fs = 250.0
-            if hasattr(ecg_test_page, 'sampler') and hasattr(ecg_test_page.sampler,'sampling_rate') and ecg_test_page.sampler.sampling_rate:
-                fs = float(ecg_test_page.sampler.sampling_rate)
+            fs = float(computed_sampling_rate)
             def _get_last(arr):
                 return arr[-int(10*fs):] if arr is not None and len(arr)>int(10*fs) else arr
             # V5 index 10, V1 index 6
@@ -3530,7 +3669,6 @@ def generate_4_3_ecg_report(filename="ecg_report.pdf", data=None, lead_images=No
     # Helper: draw logo on every page AND ALIGNED pink grid background on Page 2
     def _draw_logo_and_footer(canvas, doc):
         import os
-        from reportlab.lib.units import mm
         
         # STEP 1: Draw FULL PAGE pink ECG grid background on Page 2 (ECG graphs page)
         if canvas.getPageNumber() == 1:  # Changed from 3 to 2
