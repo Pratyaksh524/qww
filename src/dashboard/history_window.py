@@ -91,7 +91,7 @@ class PdfPreviewPanel(QWidget):
 
         self.page_label = QLabel("No report")
         self.page_label.setAlignment(Qt.AlignCenter)
-        self.page_label.setStyleSheet("font-weight:bold;color:#444;")
+        self.page_label.setStyleSheet("font-weight:700;color:#111;")
 
         self.next_btn = QPushButton("Next ▶")
         self.next_btn.setFixedWidth(70)
@@ -113,7 +113,7 @@ class PdfPreviewPanel(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setAlignment(Qt.AlignCenter)
-        self.scroll.setStyleSheet("background:#666;border:none;")
+        self.scroll.setStyleSheet("background:#f4f4f4;border:1px solid #d9d9d9;")
 
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
@@ -144,7 +144,7 @@ class PdfPreviewPanel(QWidget):
         self._total_pages = 0
         self.img_label.setPixmap(QPixmap())
         self.img_label.setText("Select a report to preview")
-        self.img_label.setStyleSheet("color:#ccc;font-size:15px;")
+        self.img_label.setStyleSheet("color:#666;font-size:15px;")
         self._update_nav()
 
     # ── private ────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ class PdfPreviewPanel(QWidget):
                 self.img_label.setText("Install pymupdf for in-app preview\npip install pymupdf")
             else:
                 self.img_label.setText("Could not render page.")
-            self.img_label.setStyleSheet("color:#eee;font-size:13px;")
+            self.img_label.setStyleSheet("color:#555;font-size:13px;")
         else:
             self.img_label.setPixmap(px)
             self.img_label.setStyleSheet("")
@@ -200,19 +200,19 @@ class SendEmailDialog(QDialog):
         self.setWindowTitle("Send Report by Email")
         self.setMinimumSize(500, 480)
         self.setStyleSheet("""
-            QDialog{background:#f8f9fa;}
-            QLabel{font-weight:bold;color:#343a40;}
+            QDialog{background:#ffffff;}
+            QLabel{font-weight:bold;color:#111111;}
             QLineEdit,QTextEdit{border:1px solid #ced4da;border-radius:5px;padding:6px;background:#fff;}
-            QPushButton{border-radius:5px;padding:8px 18px;font-weight:bold;color:#fff;background:#007bff;border:none;}
-            QPushButton:hover{background:#0056b3;}
-            QPushButton#cancel{background:#6c757d;}
-            QPushButton#cancel:hover{background:#495057;}
+            QPushButton{border-radius:5px;padding:8px 18px;font-weight:bold;color:#fff;background:#111111;border:none;}
+            QPushButton:hover{background:#000000;}
+            QPushButton#cancel{background:#444444;}
+            QPushButton#cancel:hover{background:#222222;}
         """)
 
         layout = QVBoxLayout(self)
 
         title = QLabel("📧  Send ECG Report by Email")
-        title.setStyleSheet("font-size:15px;font-weight:bold;color:#007bff;margin-bottom:8px;")
+        title.setStyleSheet("font-size:15px;font-weight:bold;color:#111111;margin-bottom:8px;")
         layout.addWidget(title)
 
         form = QFormLayout()
@@ -250,7 +250,7 @@ class SendEmailDialog(QDialog):
         # Attachment label
         fname = os.path.basename(report_path) if report_path else "—"
         att_lbl = QLabel(f"📎 Attachment: {fname}")
-        att_lbl.setStyleSheet("color:#28a745;font-weight:normal;margin-top:4px;")
+        att_lbl.setStyleSheet("color:#333333;font-weight:normal;margin-top:4px;")
         layout.addWidget(att_lbl)
 
         # Buttons
@@ -339,76 +339,67 @@ class UploadWorker(QThread):
 class HistoryWindow(QDialog):
     """ECG Report History — split pane: report list (left) + PDF preview (right)."""
 
-    # ── blue/white professional theme ────────────────────────────────────────
+    # ── black/white clean theme ─────────────────────────────────────────────
     STYLE = """
         QDialog{
-            background:#f5f7fa;
+            background:#ffffff;
+            color:#111111;
             font-family:'Segoe UI',Helvetica,Arial,sans-serif;
         }
-        /* ── table ── */
         QTableWidget{
-            border:none;
+            border:1px solid #d9d9d9;
             background:#ffffff;
-            gridline-color:#e3eaf5;
-            selection-background-color:#1a73e8;
+            gridline-color:#ececec;
+            selection-background-color:#111111;
             selection-color:#ffffff;
-            alternate-background-color:#f0f5ff;
+            alternate-background-color:#fafafa;
         }
         QTableWidget::item{
-            padding:5px 8px;
-            border-bottom:1px solid #e3eaf5;
-            color:#1a2340;
+            padding:6px 8px;
+            border-bottom:1px solid #efefef;
+            color:#111111;
         }
         QHeaderView::section{
-            background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1a73e8,stop:1 #1558b0);
+            background:#111111;
             color:#ffffff;
-            font-weight:bold;
+            font-weight:700;
             font-size:12px;
             padding:8px 6px;
             border:none;
-            border-right:1px solid #1558b0;
+            border-right:1px solid #2a2a2a;
         }
-        /* ── all buttons: blue/white ── */
         QPushButton{
-            background:#1a73e8;
+            background:#111111;
             color:#ffffff;
-            border:none;
-            border-radius:5px;
-            padding:7px 15px;
+            border:1px solid #111111;
+            border-radius:6px;
+            padding:7px 14px;
             font-weight:600;
             font-size:12px;
-            letter-spacing:0.3px;
         }
-        QPushButton:hover{background:#1558b0;}
-        QPushButton:pressed{background:#0d47a1;}
-        QPushButton#btn_secondary{
-            background:#ffffff;
-            color:#1a73e8;
-            border:1.5px solid #1a73e8;
-        }
-        QPushButton#btn_secondary:hover{background:#e8f0fe;}
+        QPushButton:hover{background:#000000;}
+        QPushButton:pressed{background:#2a2a2a;}
+        QPushButton#btn_secondary,
         QPushButton#btn_close{
             background:#ffffff;
-            color:#1a73e8;
-            border:1.5px solid #1a73e8;
+            color:#111111;
+            border:1px solid #111111;
         }
-        QPushButton#btn_close:hover{background:#e8f0fe;}
-        /* ── inputs ── */
+        QPushButton#btn_secondary:hover,
+        QPushButton#btn_close:hover{background:#f3f3f3;}
         QLineEdit,QComboBox,QDateEdit{
-            border:1.5px solid #c5d4f0;
-            border-radius:5px;
+            border:1px solid #cfcfcf;
+            border-radius:6px;
             padding:6px 10px;
             background:#ffffff;
-            color:#1a2340;
+            color:#111111;
             font-size:13px;
         }
-        QLineEdit:focus,QComboBox:focus,QDateEdit:focus{border-color:#1a73e8;}
+        QLineEdit:focus,QComboBox:focus,QDateEdit:focus{border-color:#111111;}
         QComboBox::drop-down{border:none;width:22px;}
-        /* ── labels ── */
-        QLabel{color:#1a2340;font-weight:600;}
-        /* ── group boxes ── */
+        QLabel{color:#111111;font-weight:600;}
         QGroupBox{
-            border:1.5px solid #c5d4f0;
+            border:1px solid #d5d5d5;
             border-radius:8px;
             background:#ffffff;
             margin-top:12px;
@@ -416,56 +407,36 @@ class HistoryWindow(QDialog):
             font-weight:bold;
         }
         QGroupBox::title{
-            color:#1a73e8;
-            font-weight:bold;
+            color:#111111;
+            font-weight:700;
             subcontrol-origin:margin;
             left:12px;
             padding:0 4px;
         }
-        /* ── splitter ── */
-        QSplitter::handle{background:#c5d4f0;width:2px;}
-        /* ── scrollbars ── */
-        QScrollBar:vertical{
-            background:#f0f5ff;
-            width:10px;
-            border-radius:5px;
-        }
-        QScrollBar::handle:vertical{
-            background:#1a73e8;
-            border-radius:5px;
-            min-height:20px;
-        }
-        QScrollBar::handle:vertical:hover{background:#1558b0;}
+        QSplitter::handle{background:#d0d0d0;width:2px;}
+        QScrollBar:vertical{background:#f5f5f5;width:10px;border-radius:5px;}
+        QScrollBar::handle:vertical{background:#9b9b9b;border-radius:5px;min-height:20px;}
+        QScrollBar::handle:vertical:hover{background:#7d7d7d;}
         QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}
-        /* ── tab bar ── */
         QTabBar::tab{
-            background:#e8f0fe;
-            color:#1a73e8;
-            border:1.5px solid #c5d4f0;
+            background:#f3f3f3;
+            color:#111111;
+            border:1px solid #d5d5d5;
             border-bottom:none;
             border-radius:5px 5px 0 0;
             padding:7px 18px;
             font-weight:600;
             font-size:12px;
             margin-right:2px;
-            min-width:100px;        /* never clip tab text */
+            min-width:100px;
         }
-        QTabBar::tab:selected{background:#1a73e8;color:#fff;}
-        QTabBar::tab:hover:!selected{background:#bdd1f8;}
-        QTabWidget::pane{
-            border:1.5px solid #c5d4f0;
-            border-radius:0 6px 6px 6px;
-            background:#ffffff;
-        }
-        /* ── list widget ── */
-        QListWidget{
-            border:1.5px solid #c5d4f0;
-            border-radius:5px;
-            background:#ffffff;
-        }
-        QListWidget::item{padding:6px 10px;color:#1a2340;}
-        QListWidget::item:selected{background:#1a73e8;color:#fff;}
-        QListWidget::item:hover:!selected{background:#e8f0fe;}
+        QTabBar::tab:selected{background:#111111;color:#ffffff;}
+        QTabBar::tab:hover:!selected{background:#e8e8e8;}
+        QTabWidget::pane{border:1px solid #d5d5d5;border-radius:0 6px 6px 6px;background:#ffffff;}
+        QListWidget{border:1px solid #d5d5d5;border-radius:5px;background:#ffffff;}
+        QListWidget::item{padding:6px 10px;color:#111111;}
+        QListWidget::item:selected{background:#111111;color:#ffffff;}
+        QListWidget::item:hover:!selected{background:#f2f2f2;}
     """
 
     def __init__(self, parent=None, username=None):
@@ -504,20 +475,18 @@ class HistoryWindow(QDialog):
         header = QFrame()
         header.setFixedHeight(54)
         header.setStyleSheet(
-            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            "stop:0 #1a73e8,stop:1 #1558b0);"
-            "border-radius:8px 8px 0 0;}"
+            "QFrame{background:#111111;border-radius:8px 8px 0 0;}"
         )
         hh = QHBoxLayout(header)
         hh.setContentsMargins(18, 0, 18, 0)
         logo = QLabel("⚡")
-        logo.setStyleSheet("font-size:22px;color:#fff;")
+        logo.setStyleSheet("font-size:20px;color:#fff;")
         title_lbl = QLabel("ECG Report History")
         title_lbl.setStyleSheet(
             "font-size:18px;font-weight:700;color:#fff;letter-spacing:0.5px;"
         )
         sub_lbl = QLabel("View, preview and send ECG reports")
-        sub_lbl.setStyleSheet("font-size:11px;color:#bbdefb;font-weight:400;")
+        sub_lbl.setStyleSheet("font-size:11px;color:#d9d9d9;font-weight:400;")
         txt_col = QVBoxLayout()
         txt_col.setSpacing(1)
         txt_col.addWidget(title_lbl)
@@ -536,8 +505,8 @@ class HistoryWindow(QDialog):
         # ── Search bar ─────────────────────────────────────────────────────
         search_frame = self._build_search_bar()
         search_frame.setStyleSheet(
-            "QFrame{background:#e8f0fe;border:none;"
-            "border-bottom:1.5px solid #c5d4f0;padding:6px 12px;}"
+            "QFrame{background:#ffffff;border:none;"
+            "border-bottom:1px solid #e3e3e3;padding:6px 12px;}"
         )
         root.addWidget(search_frame)
 
@@ -718,11 +687,11 @@ class HistoryWindow(QDialog):
             "Type a doctor name and press 'Fetch Reports' to load from cloud."
         )
         self.rev_status_lbl.setStyleSheet(
-            "color:#5f8dd3;font-size:11px;font-weight:400;"
+            "color:#444;font-size:11px;font-weight:400;"
         )
         hint_row.addWidget(self.rev_status_lbl, 1)
         hint_lbl = QLabel("Double-click a row to open URL")
-        hint_lbl.setStyleSheet("color:#aaa;font-size:10px;font-weight:400;")
+        hint_lbl.setStyleSheet("color:#666;font-size:10px;font-weight:400;")
         hint_row.addWidget(hint_lbl)
         layout.addLayout(hint_row)
         return w
@@ -781,7 +750,7 @@ class HistoryWindow(QDialog):
                     )
                     if c == 5:   # URL column
                         item.setData(Qt.UserRole, v)
-                        item.setForeground(QColor("#1a73e8"))
+                        item.setForeground(QColor("#111111"))
                         item.setToolTip(v)   # full presigned URL on hover
                     self.rev_table.setItem(r, c, item)
 
@@ -832,14 +801,14 @@ class HistoryWindow(QDialog):
         h.setSpacing(10)
 
         srch_lbl = QLabel("Search by:")
-        srch_lbl.setStyleSheet("color:#1a73e8;font-size:12px;")
+        srch_lbl.setStyleSheet("color:#111111;font-size:12px;")
         self.search_type_combo = QComboBox()
         self.search_type_combo.addItems(["Patient Name", "Date Range", "Single Date"])
         self.search_type_combo.currentTextChanged.connect(self._on_search_type_changed)
         self.search_type_combo.setFixedWidth(130)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Patient name…")
+        self.search_input.setPlaceholderText("Patient name...")
         self.search_input.textChanged.connect(self.filter_table)
 
         self.start_date_edit = QDateEdit()
@@ -847,7 +816,7 @@ class HistoryWindow(QDialog):
         self.start_date_edit.setDate(QDate.currentDate().addDays(-30))
         self.start_date_edit.dateChanged.connect(self.filter_table)
         self.to_label = QLabel("→")
-        self.to_label.setStyleSheet("color:#1a73e8;")
+        self.to_label.setStyleSheet("color:#111111;")
         self.end_date_edit = QDateEdit()
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDate(QDate.currentDate())
@@ -858,7 +827,7 @@ class HistoryWindow(QDialog):
         self.single_date_edit.setDate(QDate.currentDate())
         self.single_date_edit.dateChanged.connect(self.filter_table)
 
-        refresh_btn = QPushButton("⟳  Refresh")
+        refresh_btn = QPushButton("Refresh")
         refresh_btn.setFixedHeight(32)
         refresh_btn.clicked.connect(self.load_history)
 
@@ -898,7 +867,7 @@ class HistoryWindow(QDialog):
     def _build_action_buttons(self, layout):
         bar = QFrame()
         bar.setStyleSheet(
-            "QFrame{background:#e8f0fe;border-top:1.5px solid #c5d4f0;"
+            "QFrame{background:#ffffff;border-top:1px solid #e3e3e3;"
             "border-radius:0 0 8px 8px;padding:4px 2px;}"
         )
         row = QHBoxLayout(bar)
@@ -914,12 +883,12 @@ class HistoryWindow(QDialog):
             row.addWidget(b)
             return b
 
-        btn("▶  Preview", self._preview_selected)
-        btn("📧  Email", self._send_email)
-        btn("🖥  System Viewer", self._open_in_system, secondary=True)
-        btn("☁  Send for Review", self.send_report_for_review)
-        btn("📤  Export All", self.export_all_reports, secondary=True)
-        btn("⟳  Cloud Status", self.refresh_reviewed_reports, secondary=True)
+        btn("Preview", self._preview_selected)
+        btn("Email", self._send_email)
+        btn("System Viewer", self._open_in_system, secondary=True)
+        btn("Send for Review", self.send_report_for_review)
+        btn("Export All", self.export_all_reports, secondary=True)
+        btn("Cloud Status", self.refresh_reviewed_reports, secondary=True)
         row.addStretch()
 
         layout.addWidget(bar)
@@ -1069,10 +1038,10 @@ class HistoryWindow(QDialog):
             entry.get("report_type", ""), status,
         ]
         status_colors = {
-            "Pending":     ("#e9ecef", "#6c757d"),
-            "Under Review":("#fff3cd", "#856404"),
-            "Reviewed":    ("#d4edda", "#155724"),
-            "Queued":      ("#cff4fc", "#0c5460"),
+            "Pending":     ("#f2f2f2", "#333333"),
+            "Under Review":("#e8e8e8", "#111111"),
+            "Reviewed":    ("#d9d9d9", "#111111"),
+            "Queued":      ("#efefef", "#333333"),
         }
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
@@ -1158,9 +1127,9 @@ class HistoryWindow(QDialog):
         from PyQt5.QtWidgets import QMenu
         from PyQt5.QtGui import QCursor
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu{background:#fff;border:1px solid #dee2e6;border-radius:5px;}"
-                           "QMenu::item{padding:7px 18px;}"
-                           "QMenu::item:selected{background:#0d6efd;color:#fff;}")
+        menu.setStyleSheet("QMenu{background:#fff;border:1px solid #cfcfcf;border-radius:5px;}"
+                           "QMenu::item{padding:7px 18px;color:#111;}"
+                           "QMenu::item:selected{background:#111;color:#fff;}")
         si = self.table.item(row, 10)
         current = si.text() if si else "Pending"
         acts = {
@@ -1181,10 +1150,10 @@ class HistoryWindow(QDialog):
         if not si:
             return
         si.setText(new_status)
-        colors = {"Pending": ("#e9ecef", "#6c757d"),
-                  "Under Review": ("#fff3cd", "#856404"),
-                  "Reviewed": ("#d4edda", "#155724")}
-        bg, fg = colors.get(new_status, ("#e9ecef", "#6c757d"))
+        colors = {"Pending": ("#f2f2f2", "#333333"),
+                  "Under Review": ("#e8e8e8", "#111111"),
+                  "Reviewed": ("#d9d9d9", "#111111")}
+        bg, fg = colors.get(new_status, ("#f2f2f2", "#333333"))
         si.setBackground(QColor(bg))
         si.setForeground(QColor(fg))
         pi = self.table.item(row, 4)
@@ -1368,23 +1337,23 @@ class HistoryWindow(QDialog):
         dlg.setMinimumSize(320, 420)
         dlg.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         dlg.setStyleSheet(
-            "QDialog{background:#f5f7fa;font-family:'Segoe UI',Arial,sans-serif;}"
-            "QLabel{color:#1a2340;font-weight:600;}"
-            "QLineEdit{border:1.5px solid #c5d4f0;border-radius:5px;"
-            "  padding:7px 10px;background:#fff;color:#1a2340;}"
-            "QLineEdit:focus{border-color:#1a73e8;}"
-            "QPushButton{background:#1a73e8;color:#fff;border:none;"
+            "QDialog{background:#ffffff;font-family:'Segoe UI',Arial,sans-serif;}"
+            "QLabel{color:#111111;font-weight:600;}"
+            "QLineEdit{border:1px solid #cfcfcf;border-radius:5px;"
+            "  padding:7px 10px;background:#fff;color:#111111;}"
+            "QLineEdit:focus{border-color:#111111;}"
+            "QPushButton{background:#111111;color:#fff;border:none;"
             "  border-radius:5px;padding:8px 20px;font-weight:600;}"
-            "QPushButton:hover{background:#1558b0;}"
-            "QPushButton#cancel{background:#fff;color:#1a73e8;"
-            "  border:1.5px solid #1a73e8;}"
-            "QPushButton#cancel:hover{background:#e8f0fe;}"
-            "QListWidget{border:1.5px solid #c5d4f0;border-radius:5px;background:#fff;}"
-            "QListWidget::item{padding:8px 12px;color:#1a2340;}"
-            "QListWidget::item:selected{background:#1a73e8;color:#fff;}"
-            "QListWidget::item:hover:!selected{background:#e8f0fe;}"
-            "QScrollBar:vertical{background:#f0f5ff;width:10px;border-radius:5px;}"
-            "QScrollBar::handle:vertical{background:#1a73e8;border-radius:5px;min-height:20px;}"
+            "QPushButton:hover{background:#000000;}"
+            "QPushButton#cancel{background:#fff;color:#111111;"
+            "  border:1px solid #111111;}"
+            "QPushButton#cancel:hover{background:#f2f2f2;}"
+            "QListWidget{border:1px solid #d5d5d5;border-radius:5px;background:#fff;}"
+            "QListWidget::item{padding:8px 12px;color:#111111;}"
+            "QListWidget::item:selected{background:#111111;color:#fff;}"
+            "QListWidget::item:hover:!selected{background:#f2f2f2;}"
+            "QScrollBar:vertical{background:#f5f5f5;width:10px;border-radius:5px;}"
+            "QScrollBar::handle:vertical{background:#9b9b9b;border-radius:5px;min-height:20px;}"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
         )
         v = QVBoxLayout(dlg)
@@ -1393,11 +1362,11 @@ class HistoryWindow(QDialog):
 
         # Header
         hdr = QLabel("Select Reviewing Doctor")
-        hdr.setStyleSheet("font-size:15px;font-weight:700;color:#1a73e8;")
+        hdr.setStyleSheet("font-size:15px;font-weight:700;color:#111111;")
         v.addWidget(hdr)
 
         sub = QLabel("Choose the doctor to receive this ECG report:")
-        sub.setStyleSheet("color:#5f8dd3;font-weight:400;font-size:12px;")
+        sub.setStyleSheet("color:#555555;font-weight:400;font-size:12px;")
         v.addWidget(sub)
 
         # Filter box  (no emoji — avoids blank rendering on some platforms)
