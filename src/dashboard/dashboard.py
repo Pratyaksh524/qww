@@ -4059,6 +4059,7 @@ class Dashboard(QWidget):
             content = self.ecg_test_page.ecg_menu.create_version_info_content()
             
             dialog = QDialog(self)
+            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
             dialog.setWindowTitle("Version Information")
             dialog.setMinimumWidth(500)
             dialog.setMinimumHeight(600)

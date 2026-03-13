@@ -2687,7 +2687,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.black)  # Ensure text is black on pink background
-        footer_text = "Deckmount Electronic , Plot No. 260, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015"
+        footer_text = "Deckmount Electronics , Plot No. 683, Phase V, Udyog Vihar, Sector 19, Gurugram, Haryana 122016"
         # Center the footer text at bottom of page
         text_width = canvas.stringWidth(footer_text, "Helvetica", 8)
         x = (doc.width + doc.leftMargin + doc.rightMargin - text_width) / 2
@@ -3299,7 +3299,7 @@ def generate_hyperkalemia_ecg_report(filename="hyperkalemia_ecg_report.pdf", lea
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.black)
-        footer_text = "Deckmount Electronic , Plot No. 260, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015"
+        footer_text = "Deckmount Electronics , Plot No. 683, Phase V, Udyog Vihar, Sector 19, Gurugram, Haryana 122016"
         text_width = canvas.stringWidth(footer_text, "Helvetica", 8)
         
         if canvas.getPageNumber() in [1]:

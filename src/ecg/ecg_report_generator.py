@@ -3304,9 +3304,9 @@ def generate_ecg_report(
 
     # Calculate RV5+SV1 = RV5 + abs(SV1) (GE/Philips standard)
     # CRITICAL: Calculate from unrounded values to avoid rounding errors
-    # SV1 is negative, so RV5+SV1 = RV5 + abs(SV1) for Sokolow-Lyon index
-    rv5_sv1_sum = rv5_mv + abs(sv1_mv)  # RV5 + abs(SV1) as per GE/Philips standard
-
+    # SV1 is negative, so RV5+SV1 = RV5 + (SV1) for Sokolow-Lyon index
+    rv5_sv1_sum = rv5_mv + (sv1_mv)  # RV5 + (SV1) as per GE/Philips standard
+    
     # SECOND COLUMN - RV5+SV1 (ABOVE ECG GRAPH - shifted further up)
     # Use 3 decimal places for precision
     rv5_sv1_sum_label = String(84.7 * mm, 273.9 * mm, f"RV5+SV1 : {rv5_sv1_sum:.3f} mV",
@@ -3658,7 +3658,7 @@ def generate_ecg_report(
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.black)  # Ensure text is black on pink background
-        footer_text = "Deckmount Electronics pvt. ltd., Plot No. 260, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015"
+        footer_text = "Deckmount Electronics pvt. ltd., Plot No. 683, Phase V, Udyog Vihar, Sector 19, Gurugram, Haryana 122016"
         # Center the footer text at bottom of page
         text_width = canvas.stringWidth(footer_text, "Helvetica", 8)
         x = (doc.width + doc.leftMargin + doc.rightMargin - text_width) / 2

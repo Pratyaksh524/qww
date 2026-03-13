@@ -1475,7 +1475,7 @@ class ECGTestPage(QWidget):
                 self.generate_report_btn.setEnabled(False)
                 self.generate_report_btn.setText("Generate Report")
                 # Apply disabled style
-                self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 16px; font-weight: bold;")
+                self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 10px; font-weight: bold;")
                 
                 timer = getattr(self, "timer", None)
                 if timer is None or not timer.isActive():
@@ -5895,7 +5895,7 @@ class ECGTestPage(QWidget):
             self.generate_report_btn.setEnabled(False)
             self.generate_report_btn.setText("Generate Report")
             # Apply disabled style
-            self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 16px; font-weight: bold;")
+            self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 10px; font-weight: bold;")
         if hasattr(self, '_12to1_timer'):
             self._12to1_timer.stop()
 
@@ -7003,6 +7003,43 @@ class ECGTestPage(QWidget):
         # Apply default dark mode and highlight it
         self._apply_overlay_mode("dark")
 
+    # def _calculate_adaptive_figsize(self, layout="12x1", num_leads=12):
+    #     """
+    #     Calculate an adaptive figure size based on the primary screen's resolution and physical DPI.
+    #     """
+    #     try:
+    #         from PyQt5.QtWidgets import QApplication
+    #         screen = QApplication.primaryScreen()
+    #         if not screen:
+    #             return (16, num_leads * 1.2) if layout == "12x1" else (16, 12)
+            
+    #         geometry = screen.availableGeometry()
+    #         width_px = geometry.width()
+    #         height_px = geometry.height()
+            
+    #         dpi_x = screen.physicalDotsPerInchX()
+    #         dpi_y = screen.physicalDotsPerInchY()
+            
+    #         if dpi_x < 40 or dpi_x > 400: dpi_x = 96.0
+    #         if dpi_y < 40 or dpi_y > 400: dpi_y = 96.0
+            
+    #         screen_width_in = width_px / dpi_x
+    #         screen_height_in = height_px / dpi_y
+            
+    #         target_width_in = screen_width_in * 0.9
+            
+    #         if layout == "12x1":
+    #             target_height_in = max(screen_height_in * 0.8, num_leads * 1.0)
+    #         else:
+    #             target_height_in = max(screen_height_in * 0.8, 8.0)
+                
+    #         target_width_in = min(target_width_in, 24.0)
+            
+    #         return (target_width_in, target_height_in)
+    #     except Exception as e:
+    #         print(f"Error calculating adaptive figsize for {layout}: {e}")
+    #         return (16, num_leads * 1.2) if layout == "12x1" else (16, 12)
+
     def _create_overlay_figure(self, overlay_layout):
         
         from matplotlib.figure import Figure
@@ -7013,6 +7050,8 @@ class ECGTestPage(QWidget):
         # Create figure with all leads - adjust spacing for better visibility
         num_leads = len(self.leads)
         fig = Figure(figsize=(16, num_leads * 1.2), facecolor='none')  # Changed to transparent
+        # figsize = self._calculate_adaptive_figsize("12x1", num_leads)
+        # fig = Figure(figsize=figsize, facecolor='none')  # Changed to transparent
         
         # Adjust subplot parameters for better spacing
         fig.subplots_adjust(left=0.05, right=0.95, top=0.99, bottom=0.06, hspace=0.02)
@@ -7040,7 +7079,7 @@ class ECGTestPage(QWidget):
             self._overlay_lines.append(line)
         
         self._overlay_canvas = FigureCanvas(fig)
-        self._overlay_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._overlay_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._overlay_canvas.setStyleSheet("background: transparent;")
         scroll_area = QScrollArea()
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
@@ -7052,8 +7091,9 @@ class ECGTestPage(QWidget):
         lead_height = 80
         self._overlay_canvas.setMinimumHeight(int(num_leads * lead_height))
         scroll_area.setWidget(self._overlay_canvas)
-        scroll_area.setFixedHeight(int(6 * lead_height))
-        overlay_layout.addWidget(scroll_area)
+        scroll_area.setMinimumHeight(int(6 * lead_height))
+        scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        overlay_layout.addWidget(scroll_area, 1)
         
         # Start update timer for overlay
         self._overlay_timer = QTimer(self)
@@ -7825,6 +7865,8 @@ class ECGTestPage(QWidget):
         
         # Create figure with 2 columns and 6 rows
         fig = Figure(figsize=(16, 12), facecolor='none')
+        # figsize = self._calculate_adaptive_figsize("6x2")
+        # fig = Figure(figsize=figsize, facecolor='none')
         
         # Adjust subplot parameters for better spacing
         fig.subplots_adjust(left=0.05, right=0.95, top=0.98, bottom=0.02, hspace=0.05, wspace=0.1)
@@ -7875,8 +7917,8 @@ class ECGTestPage(QWidget):
         
         self._overlay_canvas = FigureCanvas(fig)
         self._overlay_canvas.setStyleSheet("background: transparent;")
-        self._overlay_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        overlay_layout.addWidget(self._overlay_canvas)
+        self._overlay_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        overlay_layout.addWidget(self._overlay_canvas, 1)
         
         # Start update timer for overlay
         self._overlay_timer = QTimer(self)

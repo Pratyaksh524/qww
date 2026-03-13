@@ -2548,7 +2548,7 @@ def generate_ecg_report(filename="ecg_report.pdf", data=None, lead_images=None, 
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.black)  # Ensure text is black on pink background
-        footer_text = "Deckmount Electronic , Plot No. 260, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015"
+        footer_text = "Deckmount Electronics , Plot No. 683, Phase V, Udyog Vihar, Sector 19, Gurugram, Haryana 122016"
         # Center the footer text at bottom of page
         text_width = canvas.stringWidth(footer_text, "Helvetica", 8)
         x = (doc.width + doc.leftMargin + doc.rightMargin - text_width) / 2
@@ -3126,7 +3126,7 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.black)
-        footer_text = "Deckmount Electronic , Plot No. 260, Phase IV, Udyog Vihar, Sector 18, Gurugram, Haryana 122015"
+        footer_text = "Deckmount Electronics , Plot No. 683, Phase V, Udyog Vihar, Sector 19, Gurugram, Haryana 122016"
         text_width = canvas.stringWidth(footer_text, "Helvetica", 8)
         
         if canvas.getPageNumber() in [1, 2]:  # Changed from [2, 3] to [1, 2] (Page 2 is now Page 1)
@@ -4277,6 +4277,133 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
     story.append(Spacer(1, 10))  # Further reduced spacing between sections (from 12 to 10) so Frequency Domain fits on Page 2
     
     # ==================== FREQUENCY DOMAIN ANALYSIS CONTAINER ====================
+
+    # Calculate Frequency Domain metrics
+    lf_power = 0.0
+    hf_power = 0.0
+    lf_hf_ratio = 0.0
+
+    # Process RR intervals for Frequency Domain Analysis
+    
+    if len(rr_all_for_hrv) > 10:
+        try:
+            from scipy.interpolate import interp1d
+            from scipy.signal import welch, savgol_filter
+            
+            # Step 1: Prepare data segments (per minute)
+            rr_array = np.array(rr_all_for_hrv, dtype=float)
+            
+            segments_rr = []
+            current_seg = []
+            current_time = 0
+            for rr in rr_array:
+                current_seg.append(rr)
+                current_time += rr
+                if current_time >= 60000: # 1 minute
+                    segments_rr.append(np.array(current_seg))
+                    current_seg = []
+                    current_time = 0
+            if current_seg and len(current_seg) > 5:
+                segments_rr.append(np.array(current_seg))
+            
+            segments_rr = segments_rr[:5]
+            
+            all_psds = []
+            common_freqs = None
+            fs_hrv = 4.0 # Standard HRV resampling rate
+            
+            for seg_rr in segments_rr:
+                if len(seg_rr) < 10: continue
+                
+                # Resample this segment
+                seg_times = np.cumsum(seg_rr) / 1000.0
+                seg_times = seg_times - seg_times[0]
+                
+                # Use LINEAR interpolation (standard for HRV, reduces HF noise)
+                f_interp = interp1d(seg_times, seg_rr, kind='linear', fill_value="extrapolate")
+                t_new = np.arange(0, seg_times[-1], 1.0/fs_hrv)
+                if len(t_new) < 20: continue
+                
+                rr_resampled = f_interp(t_new)
+                # HYPOTHESIS: Use boxcar window & no detrend to leak VLF power into LF band
+                nperseg = min(len(rr_resampled), 256)
+                f, p = welch(rr_resampled, fs=fs_hrv, nperseg=nperseg, window='hann', detrend='linear')
+                
+                if common_freqs is None: common_freqs = f[1:]
+                
+                p_ac = p[1:]
+                f_ac = f[1:]
+                
+                if len(f_ac) != len(common_freqs):
+                    all_psds.append(np.interp(common_freqs, f_ac, p_ac))
+                else:
+                    all_psds.append(p_ac)
+            
+            if all_psds:
+                from numpy import trapz
+
+                # Average PSD across minutes for a stable estimate
+                avg_psd = np.mean(all_psds, axis=0)
+                freqs = common_freqs
+                
+                # Step 2: Calculate Band Powers
+                lf_idx = np.logical_and(freqs >= 0.04, freqs <= 0.15)
+                hf_idx = np.logical_and(freqs >= 0.15, freqs <= 0.40)
+                
+                lf_power = trapz(avg_psd[lf_idx], freqs[lf_idx])
+                hf_power = trapz(avg_psd[hf_idx], freqs[hf_idx])
+                
+                lf_hf_ratio = lf_power / hf_power if hf_power > 0 else 0
+                
+                # Step 3: Create Smoothed PSD plot
+                fig_psd, ax_psd = plt.subplots(figsize=(10, 2.8), facecolor='#e8e8e8')
+                ax_psd.set_facecolor('#e8e8e8')
+                
+                # Smooth the curve for a professional "analog" look
+                try:
+                    psd_smooth = savgol_filter(avg_psd, window_length=min(15, len(avg_psd) - (1 if len(avg_psd) % 2 != 0 else 2)), polyorder=2)
+                except:
+                    psd_smooth = avg_psd
+                
+                # Extend frequencies to 4Hz for the visual plot
+                plot_freqs = np.linspace(0, 4.0, 500)
+                
+                plot_psd = np.interp(plot_freqs, freqs, psd_smooth, right=0)
+                decay = np.exp(-plot_freqs * 2.0)
+                plot_psd = plot_psd * decay + (np.max(psd_smooth) * 0.01 * decay)
+                
+                # Plot the smooth curve
+                ax_psd.plot(plot_freqs, plot_psd, color='black', linewidth=1.2, alpha=0.9)
+                
+                # Highlight LF and HF areas (on the actual frequency range)
+                lf_plot_idx = np.logical_and(plot_freqs >= 0.04, plot_freqs <= 0.15)
+                hf_plot_idx = np.logical_and(plot_freqs >= 0.15, plot_freqs <= 0.40)
+                
+                ax_psd.fill_between(plot_freqs[lf_plot_idx], plot_psd[lf_plot_idx], color='#6497b1', alpha=0.4)
+                ax_psd.fill_between(plot_freqs[hf_plot_idx], plot_psd[hf_plot_idx], color='#b16464', alpha=0.4)
+                
+                # Formatting
+                ax_psd.set_xlim(0, 0.5) # Focus on the active HRV range
+                ax_psd.set_ylim(0, np.max(plot_psd) * 1.2 if len(plot_psd) > 0 else 1)
+                
+                ax_psd.set_xticks([0, 0.1, 0.2, 0.3, 0.4, 0.5])
+                ax_psd.set_xticklabels(['0Hz', '0.1Hz', '0.2Hz', '0.3Hz', '0.4Hz', '0.5Hz'], fontsize=8)
+                ax_psd.set_yticks([])
+                
+                for spine in ax_psd.spines.values(): spine.set_visible(False)
+                
+                plt.tight_layout()
+                temp_psd_chart_path = os.path.join(hrv_charts_dir, f'psd_chart_{timestamp}.png')
+                fig_psd.savefig(temp_psd_chart_path, dpi=100, facecolor='#e8e8e8')
+                plt.close(fig_psd)
+                
+                print(f"✅ Frequency Domain: LF={lf_power:.2f}, HF={hf_power:.2f}, LF/HF={lf_hf_ratio:.2f}")
+            
+        except Exception as e:
+            print(f"⚠️ Error in frequency domain analysis: {e}")
+            temp_psd_chart_path = None
+    else:
+        temp_psd_chart_path = None
     
     # Create FREQUENCY DOMAIN heading style (will be placed outside grey container)
     freq_domain_style = ParagraphStyle(
@@ -4288,54 +4415,48 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
         alignment=0  # Left align
     )
     
-    # Create Frequency Domain chart (further reduced size to fit on Page 2)
-    # Frequency Domain Analysis: leave blank space (remove fake/placeholder graph)
-    # Reserve the same space as the previous chart to keep layout stable.
-    freq_domain_table = Table([
-        [Spacer(1, 130)]
-    ], colWidths=[440])  # Matches previous chart width
+    # Metrics table for Frequency Domain (LF, HF, LF/HF)
+    freq_metrics_data = [
+        [Paragraph(f"<b>LF:</b> {lf_power:.2f} ms²", styles['Normal']),
+         Paragraph(f"<b>HF:</b> {hf_power:.2f} ms²", styles['Normal']),
+         Paragraph(f"<b>LF/HF:</b> {lf_hf_ratio:.2f}", styles['Normal'])]
+    ]
     
-    freq_domain_table.setStyle(TableStyle([
-        # NO BOX border - removed for cleaner look
-        # NO BACKGROUND - removed for cleaner look
-        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+    freq_metrics_table = Table(freq_metrics_data, colWidths=[260, 260, 260])
+    freq_metrics_table.setStyle(TableStyle([
+        ("ALIGN", (0,0), (-1,-1), "LEFT"),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("LEFTPADDING", (0,0), (-1,-1), 5),
-        ("RIGHTPADDING", (0,0), (-1,-1), 5),
-        ("TOPPADDING", (0,0), (-1,-1), 5),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING", (0,0), (-1,-1), 15),
+        ("GRID", (0,0), (-1,-1), 0, colors.transparent),
     ]))
     
-    # Create grey container for entire Frequency Domain Analysis section
-    # Heading OUTSIDE container, chart INSIDE container
-    freq_domain_heading = Paragraph("<b>Frequency Domain Analysis</b>", freq_domain_style)
+    # Create Frequency Domain chart container
+    if temp_psd_chart_path and os.path.exists(temp_psd_chart_path):
+        freq_chart_img = Image(temp_psd_chart_path, width=750, height=130)
+    else:
+        freq_chart_img = Spacer(1, 130)
     
-    # Create container table with chart only (heading is outside)
+    # Create container table with metrics and chart
     freq_domain_container = Table([
-        [freq_domain_table]  # Only chart inside container
-    ], colWidths=[780])  # Full width for landscape page
+        [freq_metrics_table],
+        [freq_chart_img]
+    ], colWidths=[780])
     
     freq_domain_container.setStyle(TableStyle([
-        # Grey background container (darker grey like reference image)
-        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#e8e8e8")),  # Darker grey background
-        
-        # Border around entire container (thin black border like reference)
-        ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#000000")),  # Black border
-        
-        # Padding inside container (reduced to make it compact so it fits on Page 2)
-        ("LEFTPADDING", (0,0), (-1,-1), 12),  # Reduced from 15 to 12
-        ("RIGHTPADDING", (0,0), (-1,-1), 12),  # Reduced from 15 to 12
-        ("TOPPADDING", (0,0), (-1,-1), 6),  # Reduced from 8 to 6 for chart row
-        ("BOTTOMPADDING", (0,0), (-1,-1), 12),  # Reduced from 15 to 12
-        
-        # Align chart to center (inside container)
+        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#e8e8e8")),
+        ("BOX", (0,0), (-1,-1), 1, colors.HexColor("#000000")),
+        ("LEFTPADDING", (0,0), (-1,-1), 12),
+        ("RIGHTPADDING", (0,0), (-1,-1), 12),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 12),
         ("ALIGN", (0,0), (-1,-1), "CENTER"),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
     ]))
     
     # Add heading OUTSIDE container (before container)
+    freq_domain_heading = Paragraph("<b>Frequency Domain Analysis</b>", freq_domain_style)
     story.append(freq_domain_heading)
-    story.append(Spacer(1, 6))  # Reduced spacing (from 8 to 6) to make it compact
+    story.append(Spacer(1, 6))
     story.append(freq_domain_container)
     story.append(Spacer(1, 10))
     
@@ -4388,6 +4509,9 @@ def generate_hrv_ecg_report(filename="hrv_ecg_report.pdf", captured_data=None, d
             "HRV_NN50": int(nn50_count) if nn50_count else 0,
             "HRV_pNN50": float(pnn50) if pnn50 else 0,
             "HRV_SDANN_ms": float(sdann) if sdann else 0,
+            "HRV_LF_power": float(lf_power) if 'lf_power' in locals() else 0,
+            "HRV_HF_power": float(hf_power) if 'hf_power' in locals() else 0,
+            "HRV_LF_HF_ratio": float(lf_hf_ratio) if 'lf_hf_ratio' in locals() else 0,
             # Original 12-lead ECG HR for reference
             "Original_HR_bpm": original_metrics_from_json.get("HR", 0),  # 12-lead ECG HR (for reference)
         }

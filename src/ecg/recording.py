@@ -130,8 +130,13 @@ class SlidingPanel(QWidget):
             parent_height = parent.height()
             
             # Calculate responsive panel size (25-35% of parent width, max 900px)
-            panel_width = min(max(int(parent_width * 0.30), 400), 900)
-            panel_height = min(max(int(parent_height * 0.85), 500), 1000)
+            # On smaller screens, allow the panel to take more percentage but set a lower minimum
+            if parent_width < 1000:
+                panel_width = min(max(int(parent_width * 0.40), 320), 500)
+            else:
+                panel_width = min(max(int(parent_width * 0.30), 400), 900)
+            
+            panel_height = min(max(int(parent_height * 0.85), 450), 1000)
         else:
             panel_width, panel_height = 600, 800
         
@@ -326,46 +331,23 @@ class SlidingPanel(QWidget):
                 self._processed_widgets.add(id(child))
                 
                 try:
-                    # Only process widgets that support setFixedSize (buttons, etc.)
-                    if hasattr(child, 'setFixedSize'):
-                        # Adjust fixed sizes for smaller panels
-                        if self.panel_width < 500:
-                            try:
-                                # Get current size safely (methods, not attributes)
-                                # Try to get size, handling cases where widget might not be initialized
-                                try:
-                                    current_width = child.width()
-                                    current_height = child.height()
-                                except (AttributeError, RuntimeError, TypeError):
-                                    # Fallback: try getting size from size() method
-                                    try:
-                                        size = child.size()
-                                        current_width = size.width() if size.width() > 0 else 0
-                                        current_height = size.height() if size.height() > 0 else 0
-                                    except (AttributeError, RuntimeError, TypeError):
-                                        # Widget not ready yet, skip it
-                                        current_width = 0
-                                        current_height = 0
-                                
-                                # Only resize if we have valid dimensions
-                                if current_width > 0 and current_height > 0:
-                                    scale_factor = min(self.panel_width / 600, 1.0)
-                                    new_width = max(int(current_width * scale_factor), 60)
-                                    new_height = max(int(current_height * scale_factor), 25)
-                                    child.setFixedSize(new_width, new_height)
-                            except (AttributeError, RuntimeError, TypeError) as e:
-                                # Silently skip widgets that can't be resized (common on touch screens)
-                                pass
+                    # Adjust font sizes for better readability on small panels
+                    if self.panel_width < 500:
+                        if hasattr(child, 'font'):
+                            font = child.font()
+                            if font.pointSize() > 12:
+                                font.setPointSize(font.pointSize() - 2)
+                                child.setFont(font)
                     
                     # Recursively process children (only if not already processed)
                     if child != parent_widget:
                         self.make_children_responsive(child)
                         
-                except (AttributeError, RuntimeError, TypeError) as e:
+                except Exception:
                     # Skip widgets that cause errors (common on touch screens during initialization)
                     continue
                     
-        except Exception as e:
+        except Exception:
             # Fail silently to prevent UI crashes on touch screens
             pass
 
@@ -634,13 +616,7 @@ class ECGMenu(QGroupBox):
         if not self.sliding_panel and parent:
             self.sliding_panel = SlidingPanel(parent)
             self.setup_parent_monitoring(parent)
-            container = getattr(parent, 'grid_widget', None)
-            if container and container.layout():
-                container.layout().addWidget(self.sliding_panel)
-            elif hasattr(parent, 'layout') and parent.layout():
-                parent.layout().addWidget(self.sliding_panel)
-            else:
-                print("Could not attach sliding panel to parent layout")
+            print("Sliding panel created as overlay (not in layout)")
         elif not self.sliding_panel:
             print("Could not find parent widget for sliding panel")
         
@@ -696,10 +672,8 @@ class ECGMenu(QGroupBox):
             if parent:
                 self.sliding_panel = SlidingPanel(parent)
                 self.setup_parent_monitoring(parent)
-                if hasattr(parent, 'grid_widget') and parent.grid_widget.layout():
-                    parent.grid_widget.layout().addWidget(self.sliding_panel)
-                else:
-                    print("Could not add sliding panel to layout")
+                # DO NOT add sliding panel to layout
+                print("Sliding panel created as overlay")
             else:
                 print("Could not find parent widget")
 
@@ -921,7 +895,7 @@ class ECGMenu(QGroupBox):
             }}
             QComboBox:focus {{
                 border: 2px solid #343434;
-                background: #ff6600;
+                background: white;
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -1038,6 +1012,8 @@ class ECGMenu(QGroupBox):
         submit_btn.clicked.connect(lambda: self.submit_ecg_details(entries, gender_menu))
         submit_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(submit_btn)
+
+        layout.addStretch(1)
 
         return widget
 
@@ -1347,6 +1323,8 @@ class ECGMenu(QGroupBox):
         btn_layout.addWidget(cancel_btn)
 
         layout.addWidget(btn_frame)
+
+        layout.addStretch(1)
         
         return widget
 
@@ -1544,7 +1522,7 @@ class ECGMenu(QGroupBox):
             },
             {
                 'title': 'EMG Filter',
-                'options': [("25Hz", "25"), ("35Hz", "35"), ("45Hz", "45"), ("75Hz", "75"), ("100Hz", "100"), ("150Hz", "150")],
+                'options': [("25Hz", "25"), ("35Hz", "35"), ("40Hz", "40"), ("75Hz", "75"), ("100Hz", "100"), ("150Hz", "150")],
                 'setting_key': 'filter_emg'
             },
             {

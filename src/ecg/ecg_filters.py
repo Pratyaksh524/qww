@@ -5,7 +5,7 @@ This module provides medical-grade filtering for ECG signals:
 - Respiration-Preserving Baseline Correction (MONITOR-GRADE): Removes motion/electrode drift while preserving respiration
 - Baseline Wander Removal (GOLD STANDARD): Median + Mean filter (commercial ECG monitor standard)
 - AC Filter: Notch filter to remove 50Hz or 60Hz power line interference
-- EMG Filter: High-pass filter to remove muscle artifacts (25Hz, 35Hz, 45Hz, 75Hz, 100Hz, 150Hz)
+- EMG Filter: High-pass filter to remove muscle artifacts (25Hz, 35Hz, 40Hz, 75Hz, 100Hz, 150Hz)
 - DFT Filter: High-pass filter to remove baseline wander (0.05Hz, 0.5Hz)
 
 Usage:
@@ -22,7 +22,7 @@ Usage:
         signal, 
         sampling_rate=500,
         ac_filter="50",  # "off", "50", or "60"
-        emg_filter="150",  # "25", "35", "45", "75", "100", "150"
+        emg_filter="150",  # "25", "35", "40", "75", "100", "150"
         dft_filter="0.5"  # "off", "0.05", or "0.5"
     )
 """
@@ -217,7 +217,7 @@ def apply_emg_filter(signal: np.ndarray, sampling_rate: float, emg_filter: str) 
     Args:
         signal: Input ECG signal
         sampling_rate: Sampling frequency in Hz
-        emg_filter: Cutoff frequency - "25", "35", "40", "45", "75", "100", or "150" (Hz)
+        emg_filter: Cutoff frequency - "25", "35", "40", "75", "100", or "150" (Hz)
     
     Returns:
         Filtered signal
@@ -360,7 +360,7 @@ def apply_ecg_filters(
         signal: Input ECG signal (numpy array or list)
         sampling_rate: Sampling frequency in Hz (default: 500)
         ac_filter: AC filter setting - "off", "50", or "60"
-        emg_filter: EMG filter setting - "25", "35", "45", "75", "100", "150"
+        emg_filter: EMG filter setting - "25", "35", "40", "75", "100", "150"
         dft_filter: DFT filter setting - "off", "0.05", or "0.5"
     
     Returns:
