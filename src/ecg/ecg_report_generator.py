@@ -22,7 +22,15 @@ ECG_LARGE_BOX_MM = 210.0 / 40.0
 ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0
 # Scale wave speed so 1 second equals 5 large boxes at 25 mm/s on 40-box grid
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
-FIXED_SAMPLES_PER_LEAD = 4000
+STANDARD_REPORT_WINDOW_SECONDS = 10.0
+
+
+def _samples_for_standard_report_window(sampling_rate):
+    """Return sample count for the standard last-10-second ECG strip."""
+    fs = _safe_float(sampling_rate, 500.0)
+    if not fs or fs <= 0:
+        fs = 500.0
+    return max(1, int(round(STANDARD_REPORT_WINDOW_SECONDS * fs)))
 
 LEAD_SEQUENCES = {
     "Standard": ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"],
@@ -555,20 +563,10 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
             filtered = filtered[hard_trim:n3 - hard_trim]
     except Exception:
         pass
-    try:
-        n4 = filtered.size
-        if n4 > 50:
-            alpha = 0.5
-            m = max(10, int((alpha * n4) / 2.0))
-            if m * 2 < n4:
-                ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, m)))
-                w = np.ones(n4)
-                w[:m] = ramp
-                w[-m:] = ramp[::-1]
-                mu = float(np.mean(filtered))
-                filtered = mu + (filtered - mu) * w
-    except Exception:
-        pass
+    # NOTE:
+    # Do not force waveform edges to a flat mean value. Edge tapering hides
+    # clinically relevant terminal morphology and can create visible "humps"
+    # before the strip ends. Keep natural morphology after filtering.
     return filtered
 
 def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
@@ -937,40 +935,20 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
         print(f" ECG data empty for {lead_name}")
         return drawing
 
-    # FORCEFUL STRAIGHTENING: Force straight baseline - no exceptions
+    # Gentle baseline conditioning for report rendering (no forced flat tail).
     if len(ecg_mv) > 0:
         # Remove DC offset first
-        dc_offset = np.nanmean(ecg_mv)  # Use mean for gentler removal
+        dc_offset = np.nanmedian(ecg_mv)
         ecg_mv = ecg_mv - dc_offset
-        
-        # FORCEFUL STRAIGHTENING: Always remove any slope
+
+        # Remove linear drift only (no artificial end flattening)
         if len(ecg_mv) > 20:
             x = np.arange(len(ecg_mv))
-            # Fit linear trend - ALWAYS remove it regardless of slope
-            coeffs = np.polyfit(x, ecg_mv, 1)  # Linear fit
+            coeffs = np.polyfit(x, ecg_mv, 1)
             slope = coeffs[0]
             trend = np.polyval(coeffs, x)
-            ecg_mv = ecg_mv - trend  # ALWAYS remove trend - no threshold
-            print(f" {lead_name}: FORCEFUL: Removed slope={slope:.6f} (no threshold)")
-            
-            # Edge conditioning for all BPM: smooth approach + hard-flat terminal segment.
-            edge_samples = min(80, max(20, len(ecg_mv) // 16))
-            if len(ecg_mv) > edge_samples * 3:
-                t = np.linspace(0.0, 1.0, edge_samples)
-                taper = 0.5 * (1.0 + np.cos(np.pi * t))
-                ecg_mv[:edge_samples] = ecg_mv[:edge_samples] * (1.0 - taper)
-                ecg_mv[-edge_samples:] = ecg_mv[-edge_samples:] * taper
-
-                # Guarantee a straight final edge (no up/down jump in report tail).
-                flat_tail = max(10, edge_samples // 4)
-                blend = max(8, edge_samples // 5)
-                if len(ecg_mv) > flat_tail + blend:
-                    blend_start = len(ecg_mv) - (flat_tail + blend)
-                    blend_end = len(ecg_mv) - flat_tail
-                    ramp = np.linspace(1.0, 0.0, blend)
-                    ecg_mv[blend_start:blend_end] = ecg_mv[blend_start:blend_end] * ramp
-                    ecg_mv[-flat_tail:] = 0.0
-                print(f" {lead_name}: Applied edge taper + flat tail ({flat_tail} samples)")
+            ecg_mv = ecg_mv - trend
+            print(f" {lead_name}: Removed baseline slope={slope:.6f}")
     
     # Gain once: mm per mV (AFTER all processing)
     y_mm = ecg_mv * wave_gain_mm_mv
@@ -1624,21 +1602,22 @@ def generate_ecg_report(
         else:
             print(f" Report Generator: Demo mode is OFF")
     
-    # Calculate number of samples to capture
-    calculated_time_window = None
+    # Always use the latest standard 10-second strip (hospital-style ECG printout)
+    calculated_time_window = STANDARD_REPORT_WINDOW_SECONDS
     if is_demo_mode:
-        num_samples_to_capture = FIXED_SAMPLES_PER_LEAD
-        computed_sampling_rate = 500
-        calculated_time_window = num_samples_to_capture / float(computed_sampling_rate)
+        if not computed_sampling_rate or computed_sampling_rate <= 0:
+            computed_sampling_rate = 500.0
+        num_samples_to_capture = _samples_for_standard_report_window(computed_sampling_rate)
         print(
-            f" DEMO MODE: Using fixed {num_samples_to_capture} samples at "
-            f"{computed_sampling_rate}Hz (~{calculated_time_window:.2f}s, ~7 beats at 60 BPM)"
+            f" DEMO MODE: Using latest {STANDARD_REPORT_WINDOW_SECONDS:.1f}s "
+            f"({num_samples_to_capture} samples at {computed_sampling_rate}Hz)"
         )
     else:
-        num_samples_to_capture = FIXED_SAMPLES_PER_LEAD
-        calculated_time_window = num_samples_to_capture / max(1e-6, computed_sampling_rate)
-        print(f" NORMAL MODE: Using fixed samples per lead: {num_samples_to_capture}")
-        print(f"   Effective time window: {calculated_time_window:.2f}s at sampling rate {computed_sampling_rate}Hz")
+        num_samples_to_capture = _samples_for_standard_report_window(computed_sampling_rate)
+        print(
+            f" NORMAL MODE: Using latest {STANDARD_REPORT_WINDOW_SECONDS:.1f}s "
+            f"({num_samples_to_capture} samples at {computed_sampling_rate}Hz)"
+        )
     
     for pos_info in lead_positions:
         lead = pos_info['lead']
@@ -1739,21 +1718,22 @@ def generate_ecg_report(
         else:
             print(f" Report Generator: Demo mode is OFF")
     
-    # Calculate number of samples to capture
-    calculated_time_window = None
+    # Always use the latest standard 10-second strip (hospital-style ECG printout)
+    calculated_time_window = STANDARD_REPORT_WINDOW_SECONDS
     if is_demo_mode:
-        num_samples_to_capture = FIXED_SAMPLES_PER_LEAD
-        computed_sampling_rate = 500
-        calculated_time_window = num_samples_to_capture / float(computed_sampling_rate)
+        if not computed_sampling_rate or computed_sampling_rate <= 0:
+            computed_sampling_rate = 500.0
+        num_samples_to_capture = _samples_for_standard_report_window(computed_sampling_rate)
         print(
-            f" DEMO MODE: Using fixed {num_samples_to_capture} samples at "
-            f"{computed_sampling_rate}Hz (~{calculated_time_window:.2f}s, ~7 beats at 60 BPM)"
+            f" DEMO MODE: Using latest {STANDARD_REPORT_WINDOW_SECONDS:.1f}s "
+            f"({num_samples_to_capture} samples at {computed_sampling_rate}Hz)"
         )
     else:
-        num_samples_to_capture = FIXED_SAMPLES_PER_LEAD
-        calculated_time_window = num_samples_to_capture / max(1e-6, computed_sampling_rate)
-        print(f" NORMAL MODE: Using fixed samples per lead: {num_samples_to_capture}")
-        print(f"   Effective time window: {calculated_time_window:.2f}s at sampling rate {computed_sampling_rate}Hz")
+        num_samples_to_capture = _samples_for_standard_report_window(computed_sampling_rate)
+        print(
+            f" NORMAL MODE: Using latest {STANDARD_REPORT_WINDOW_SECONDS:.1f}s "
+            f"({num_samples_to_capture} samples at {computed_sampling_rate}Hz)"
+        )
     
     for pos_info in lead_positions:
         lead = pos_info["lead"]
