@@ -362,20 +362,8 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
             filtered = filtered[hard_trim:n3 - hard_trim]
     except Exception:
         pass
-    try:
-        n4 = filtered.size
-        if n4 > 50:
-            alpha = 0.5
-            m = max(10, int((alpha * n4) / 2.0))
-            if m * 2 < n4:
-                ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, m)))
-                w = np.ones(n4)
-                w[:m] = ramp
-                w[-m:] = ramp[::-1]
-                mu = float(np.mean(filtered))
-                filtered = mu + (filtered - mu) * w
-    except Exception:
-        pass
+    # Keep natural morphology at strip edges; avoid forced flattening/tapering
+    # that can create artificial terminal humps.
     return filtered
 
 def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
@@ -762,21 +750,7 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
             ecg_normalized = center_y + (local - baseline)
         except Exception:
             pass
-        edge = min(120, max(24, int(0.18 * len(ecg_normalized))))
-        if len(ecg_normalized) > edge * 3:
-            r = np.sin(np.linspace(0.0, np.pi / 2.0, edge)) ** 2
-            ecg_normalized[:edge] = center_y + (ecg_normalized[:edge] - center_y) * r
-            ecg_normalized[-edge:] = center_y + (ecg_normalized[-edge:] - center_y) * r[::-1]
-
-            # Guarantee flat strip ending at right edge for every BPM.
-            flat_tail = max(12, edge // 4)
-            blend = max(8, edge // 5)
-            if len(ecg_normalized) > flat_tail + blend:
-                blend_start = len(ecg_normalized) - (flat_tail + blend)
-                blend_end = len(ecg_normalized) - flat_tail
-                ramp = np.linspace(1.0, 0.0, blend)
-                ecg_normalized[blend_start:blend_end] = center_y + (ecg_normalized[blend_start:blend_end] - center_y) * ramp
-                ecg_normalized[-flat_tail:] = center_y
+        # Do not force-flat the tail; keep true waveform until the strip end.
         
         # Draw ALL ECG data points - NO REDUCTION
         ecg_color = colors.HexColor("#000000")  # Black ECG line
