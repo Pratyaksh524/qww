@@ -2,13 +2,14 @@ name: Build Windows EXE
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-windows-exe:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -17,27 +18,39 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            src/requirements.txt
+            requirements.txt
 
-      - name: Install dependencies
+      - name: Install dependencies (pinned first)
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          if (Test-Path "requirements.txt") {
+          if (Test-Path "src/requirements.txt") {
+            pip install -r src/requirements.txt
+          } elseif (Test-Path "requirements.txt") {
             pip install -r requirements.txt
           }
-          pip install pyinstaller
 
-      - name: Build Windows EXE with PyInstaller
+      - name: Validate sources compile
         shell: pwsh
         run: |
-          cd src
-          pyinstaller --onefile --noconsole --name CardioXApp --collect-submodules ecg --collect-submodules dashboard --collect-submodules utils --collect-submodules auth --hidden-import ecg.hrv_test --hidden-import ecg.hyperkalemia_test --hidden-import ecg.hrv_ecg_report_generator --hidden-import ecg.hyperkalemia_ecg_report_generator --hidden-import reportlab --hidden-import reportlab.lib --hidden-import reportlab.platypus --hidden-import matplotlib.backends.backend_agg --add-data "..\\dummycsv.csv;." --add-data "..\\assets;assets" --add-data "..\\ecg_settings.json;." --add-data "..\\users.json;." --add-data "chat_history.json;." main.py
+          python -m compileall -q src build_exe.py
 
-      - name: Upload EXE artifact
+      - name: Build Windows EXE (standardized onedir flow)
+        shell: pwsh
+        run: |
+          python build_exe.py --name ECGMonitor
+          if (!(Test-Path "dist/ECGMonitor/ECGMonitor.exe")) {
+            Write-Error "Expected executable missing: dist/ECGMonitor/ECGMonitor.exe"
+            exit 1
+          }
+
+      - name: Upload EXE artifact (full onedir package)
         uses: actions/upload-artifact@v4
         with:
-          name: CardioXApp-windows
-          path: src/dist/CardioXApp.exe
-
-
+          name: ECGMonitor-windows-onedir
+          path: dist/ECGMonitor/**
+          if-no-files-found: error
