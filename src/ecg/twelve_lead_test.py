@@ -2325,6 +2325,8 @@ class ECGTestPage(QWidget):
         p_axis = self.calculate_p_axis_from_median()
         t_axis = self.calculate_t_axis_from_median()
         self.last_qrs_axis = qrs_axis
+        self.last_p_axis = p_axis
+        self.last_t_axis = t_axis
         
         # Calculate QRS-T angle (highly valuable clinical metric)
         from .clinical_measurements import calculate_qrs_t_angle
@@ -6400,6 +6402,12 @@ class ECGTestPage(QWidget):
         class MockDashboard:
             def __init__(self, usr): self.username = usr
 
+        # Use cached metrics only (no heavy median-beat computations on UI thread)
+        # to keep live plotting smooth while report generation starts.
+        cached_p_axis = getattr(self, 'last_p_axis', '--')
+        cached_qrs_axis = getattr(self, 'last_qrs_axis', '--')
+        cached_t_axis = getattr(self, 'last_t_axis', '--')
+
         class MockECGPageRef:
             def __init__(self, page, data_snap, usr):
                 std_names = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
@@ -6422,13 +6430,11 @@ class ECGTestPage(QWidget):
                 
                 self.dashboard_instance = MockDashboard(usr)
 
-                self._p_axis = page.calculate_p_axis_from_median() if hasattr(page, 'calculate_p_axis_from_median') else "--"
-                self._qrs_axis = page.calculate_qrs_axis_from_median() if hasattr(page, 'calculate_qrs_axis_from_median') else "--"
-                self._t_axis = page.calculate_t_axis_from_median() if hasattr(page, 'calculate_t_axis_from_median') else "--"
-                try:
-                    self._rv5, self._sv1 = page.get_rv5_sv1_from_median() if hasattr(page, 'get_rv5_sv1_from_median') else (None, None)
-                except Exception:
-                    self._rv5, self._sv1 = (None, None)
+                # IMPORTANT: Keep this lightweight to avoid UI stalls/freeze on report click.
+                self._p_axis = cached_p_axis
+                self._qrs_axis = cached_qrs_axis
+                self._t_axis = cached_t_axis
+                self._rv5, self._sv1 = (None, None)
 
             def calculate_p_axis_from_median(self): return self._p_axis
             def calculate_qrs_axis_from_median(self): return self._qrs_axis
@@ -6677,12 +6683,7 @@ class ECGTestPage(QWidget):
         thread.started.connect(worker.run)
         thread.finished.connect(thread.deleteLater)
 
-        # ── Flush pending repaints BEFORE starting the thread ─────────────────
-        # This gives the ECG canvas one full repaint cycle so waves update visibly
-        # before any thread overhead begins — eliminates the "jitter on Save click".
-        from PyQt5.QtWidgets import QApplication
-        QApplication.processEvents()
-
+        # Start worker thread immediately; heavy report I/O/rendering stays off UI thread.
         thread.start()
         # Main thread returns immediately — ECG timer keeps firing uninterrupted.
 
