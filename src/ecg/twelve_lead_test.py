@@ -2045,22 +2045,16 @@ class ECGTestPage(QWidget):
             else:
                 print(f" ⚠️ RR/HR inconsistency: RR={rr_ms:.1f} ms, HR={heart_rate_raw} BPM, expected RR={expected_rr:.1f} ms (diff={abs(rr_ms-expected_rr):.1f} ms)")
         
-        bpm_active = hasattr(self, '_bpm_ctrl') and self._bpm_ctrl is not None and self._bpm_ctrl.is_running
-        if not bpm_active:
-            self.last_heart_rate = heart_rate_raw
-            
-            # FIX-HR-STAB: heart_rate_raw already comes from calculate_hr_rr()
-            # (via user_metrics) or local R-peak detection, both of which apply
-            # median + dead-zone stabilization.  Do NOT re-smooth here.
-            heart_rate = heart_rate_raw
-            self._last_displayed_hr = heart_rate
-        else:
-            # We STILL want `heart_rate` to be assigned so that anything later in this function
-            # doesn't crash (though most skip local HR things if not needed).
-            heart_rate = getattr(self, 'last_heart_rate', heart_rate_raw)
-            # Recompute rr_ms so QT/QTc ratio perfectly mirrors the displayed stable BPM (e.g. at 60BPM, RR=1000ms -> QTc=QT)
-            if heart_rate > 0:
-                rr_ms = 60000.0 / heart_rate
+        # Always derive display HR + interval math from the same RR source selected above.
+        # This keeps BPM, RR, QT and QTc internally consistent and aligned with
+        # reference software that uses median RR from detected beats.
+        self.last_heart_rate = heart_rate_raw
+
+        # FIX-HR-STAB: heart_rate_raw already comes from calculate_hr_rr()
+        # (via user_metrics) or local R-peak detection, both of which apply
+        # median + dead-zone stabilization.  Do NOT re-smooth here.
+        heart_rate = heart_rate_raw
+        self._last_displayed_hr = heart_rate
 
         
         # Calculate PR Interval using atrial vector method (Lead I + aVF) - GE/Philips/Fluke standard
@@ -5844,19 +5838,23 @@ class ECGTestPage(QWidget):
     # ---------------------- Stop Button Functionality ----------------------
 
     def _refresh_holter_bpm_label(self):
-        """Called every 3 s by _bpm_refresh_timer.
-        Reads the stable 30-second-window BPM from HolterBPMController and
-        writes it to the heart_rate metric label.
-        This is the ONLY place that updates the HR label during live acquisition.
+        """Called by _bpm_refresh_timer.
+        Keep the on-screen BPM synchronized with RR-derived BPM from the ECG
+        metrics pipeline (single source of truth).
         """
         try:
             if self._bpm_ctrl is None or not self._bpm_ctrl.is_running:
                 return
-            bpm = self._bpm_ctrl.current_bpm()
+
+            rr_ms = getattr(self, 'last_rr_interval', 0)
+            bpm = int(round(60000.0 / rr_ms)) if rr_ms and rr_ms > 0 else 0
+            if bpm <= 0:
+                bpm = int(round(self._bpm_ctrl.current_bpm()))
+
             if bpm > 0 and hasattr(self, 'metric_labels') and 'heart_rate' in self.metric_labels:
-                self.metric_labels['heart_rate'].setText(f"{int(round(bpm)):3d}")
+                self.metric_labels['heart_rate'].setText(f"{bpm:3d}")
                 # Keep last_heart_rate in sync so reports get the right value
-                self.last_heart_rate = int(round(bpm))
+                self.last_heart_rate = bpm
         except Exception as _e:
             print(f"[ECGTestPage] _refresh_holter_bpm_label error: {_e}")
 
