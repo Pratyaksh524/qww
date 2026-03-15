@@ -1172,7 +1172,7 @@ class ExpandedLeadView(QDialog):
             self.ax.set_ylim(y_min, y_max)
 
         if hasattr(self, 'canvas'):
-            self.canvas.draw()
+            self.canvas.draw_idle()
     
     def create_metrics_panel(self, parent_layout):
         """Create the metrics panel"""
@@ -1286,6 +1286,33 @@ class ExpandedLeadView(QDialog):
         """Stop live data updates"""
         self.is_live = False
         self.timer.stop()
+
+    def _resolve_runtime_sampling_rate(self, parent=None):
+        """Return stable runtime sampling rate for plotting/analysis.
+
+        Hardware mode is locked to 500 Hz. Demo mode may use demo/detected rate.
+        This prevents waveform deformation when UI focus changes reduce measured
+        UI callback cadence.
+        """
+        try:
+            p = parent if parent is not None else (self.parent() if hasattr(self, 'parent') else None)
+            is_demo = bool(getattr(self, 'demo_mode_active', False))
+            if p is not None and hasattr(p, 'demo_toggle') and p.demo_toggle is not None:
+                try:
+                    is_demo = bool(p.demo_toggle.isChecked())
+                except Exception:
+                    pass
+
+            if not is_demo:
+                return 500.0
+
+            if p is not None and hasattr(p, 'demo_fs') and p.demo_fs:
+                return float(p.demo_fs)
+            if p is not None and hasattr(p, 'sampler') and getattr(p.sampler, 'sampling_rate', 0):
+                return float(p.sampler.sampling_rate)
+        except Exception:
+            pass
+        return 500.0
     
     def update_live_data(self):
         """Update ECG data from parent (hardware)"""
@@ -1295,16 +1322,11 @@ class ExpandedLeadView(QDialog):
         try:
             # Get current data from parent ECG test page
             parent = self.parent()
-            # Align sampling rate with parent so HR/RR match dashboard
+            # Keep expanded-view sampling stable across focus/tab switches.
             try:
-                if hasattr(parent, 'sampler') and getattr(parent.sampler, 'sampling_rate', 0):
-                    self.sampling_rate = float(parent.sampler.sampling_rate)
-                    self.analyzer.fs = self.sampling_rate
-                    self.arrhythmia_detector.fs = self.sampling_rate
-                elif hasattr(parent, 'sampling_rate') and parent.sampling_rate:
-                    self.sampling_rate = float(parent.sampling_rate)
-                    self.analyzer.fs = self.sampling_rate
-                    self.arrhythmia_detector.fs = self.sampling_rate
+                self.sampling_rate = float(self._resolve_runtime_sampling_rate(parent))
+                self.analyzer.fs = self.sampling_rate
+                self.arrhythmia_detector.fs = self.sampling_rate
             except Exception:
                 pass
             if hasattr(parent, 'data') and len(parent.data) > 0:
@@ -1789,14 +1811,21 @@ class ExpandedLeadView(QDialog):
             gain = wave_gain_mm / 10.0  # 10mm/mV = 1.0x baseline
 
             raw_center = (np.median(display_signal) if len(display_signal) > 0 else 0.0)
-            centered = display_signal - raw_center
+            # Stabilize baseline center to avoid visible deformation during UI stalls/focus switches
+            if not hasattr(self, '_display_center_ema'):
+                self._display_center_ema = raw_center
+            center_alpha = 0.12
+            self._display_center_ema = (center_alpha * raw_center) + ((1.0 - center_alpha) * self._display_center_ema)
+
+            centered = display_signal - self._display_center_ema
             scaled = centered * (gain * self.amplification)
             visual_gain = 1.5
             adc_center = -2048 if str(self.lead_name).upper() == 'AVR' else 2048
             display_adc = adc_center + scaled * visual_gain
             
             # Create time array matching the signal length
-            time = np.arange(len(display_adc), dtype=float) / self.sampling_rate + (start_idx / self.sampling_rate)
+            fs = max(1.0, float(self.sampling_rate))
+            time = np.arange(len(display_adc), dtype=float) / fs + (start_idx / fs)
 
             ylim_low, ylim_high = (-4096.0, 0.0) if str(self.lead_name).upper() == 'AVR' else (0.0, 4096.0)
 
@@ -2061,7 +2090,7 @@ class ExpandedLeadView(QDialog):
                 except Exception:
                     pass
 
-            self.canvas.draw()
+            self.canvas.draw_idle()
         except Exception as e:
             print(f"Error updating plot: {e}")
     
@@ -2617,7 +2646,7 @@ class ExpandedLeadView(QDialog):
             if leg is not None:
                 leg.remove()
 
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
         except Exception as e:
             print(f"Error updating plot markers: {e}")
