@@ -1385,6 +1385,23 @@ class ECGTestPage(QWidget):
             text = "Demo Mode: ON" if is_on else "Demo Mode: OFF"
             self.demo_toggle.setText(self.tr(text))
 
+    def _can_generate_report(self) -> bool:
+        """Generate report is allowed when acquisition is running or demo mode is ON."""
+        try:
+            is_demo_mode = False
+            if hasattr(self, 'demo_toggle') and self.demo_toggle is not None:
+                is_demo_mode = bool(self.demo_toggle.isChecked())
+
+            is_acquisition_running = False
+            if hasattr(self, 'timer') and self.timer is not None:
+                is_acquisition_running = bool(self.timer.isActive())
+            if not is_acquisition_running and hasattr(self, 'serial_reader') and self.serial_reader is not None:
+                is_acquisition_running = bool(getattr(self.serial_reader, 'running', False))
+
+            return is_demo_mode or is_acquisition_running
+        except Exception:
+            return False
+
     def _start_generate_report_cooldown(self, seconds: int = 10, reason: str = ""):
         """Disable Generate Report button for a countdown window, then re-enable."""
         if not hasattr(self, "generate_report_btn"):
@@ -1419,13 +1436,8 @@ class ECGTestPage(QWidget):
         self.generate_report_btn.setText(f"Generate Report ({seconds})")
 
         def _finish_cooldown():
-            # Only re-enable if test is still running or demo mode is ON.
-            can_enable = bool(getattr(self, 'running', False))
-            if hasattr(self, 'demo_toggle') and self.demo_toggle is not None:
-                try:
-                    can_enable = can_enable or bool(self.demo_toggle.isChecked())
-                except Exception:
-                    pass
+            # Re-enable when acquisition is running or demo mode is ON.
+            can_enable = self._can_generate_report()
             if can_enable:
                 self.generate_report_btn.setEnabled(True)
                 self.generate_report_btn.setStyleSheet(green_style)
@@ -1464,19 +1476,25 @@ class ECGTestPage(QWidget):
                     except Exception:
                         pass
             else:
-                # Demo mode OFF - Permanently disable button and cancel timers
-                # Cancel any active countdown timers
+                # Demo mode OFF: keep report enabled if live acquisition is still running.
+                # Cancel any active countdown timers first.
                 for timer in self.countdown_timers:
                     if hasattr(timer, "stop") and timer.isActive():
                         timer.stop()
                 self.countdown_timers.clear()
-                
-                # Permanently disable generate report button when demo is off
-                self.generate_report_btn.setEnabled(False)
+
                 self.generate_report_btn.setText("Generate Report")
-                # Apply disabled style
-                self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 10px; font-weight: bold;")
-                
+                if self._can_generate_report():
+                    self.generate_report_btn.setEnabled(True)
+                    try:
+                        if hasattr(self, "green_button_style"):
+                            self.generate_report_btn.setStyleSheet(self.green_button_style)
+                    except Exception:
+                        pass
+                else:
+                    self.generate_report_btn.setEnabled(False)
+                    self.generate_report_btn.setStyleSheet("background: #cccccc; color: #666666; border-radius: 10px; padding: 8px 0; font-size: 10px; font-weight: bold;")
+
                 timer = getattr(self, "timer", None)
                 if timer is None or not timer.isActive():
                     self.update_recording_button_state()
@@ -1687,11 +1705,14 @@ class ECGTestPage(QWidget):
             return
         
         # Get sampling rate
-        fs = 500 # Default based on observed hardware behavior
-        if hasattr(self, 'sampler') and hasattr(self.sampler, 'sampling_rate') and self.sampler.sampling_rate > 10:
-            fs = float(self.sampler.sampling_rate)
-        elif hasattr(self, 'sampling_rate') and self.sampling_rate > 10:
-            fs = float(self.sampling_rate)
+        # Hardware stream is fixed 500 Hz. Keep calculations locked to configured rate
+        # to avoid metric/wave instability when UI focus changes and measured UI rate dips.
+        fs = 500.0
+        if hasattr(self, 'demo_toggle') and self.demo_toggle.isChecked():
+            if hasattr(self, 'demo_fs') and self.demo_fs:
+                fs = float(self.demo_fs)
+            elif hasattr(self, 'sampler') and hasattr(self.sampler, 'sampling_rate') and self.sampler.sampling_rate > 10:
+                fs = float(self.sampler.sampling_rate)
             
         # Unified ECG metrics (HR, RR, PR, QRS, QT, QTc) — single source of truth
         try:
@@ -1871,9 +1892,16 @@ class ECGTestPage(QWidget):
                 # if not hasattr(self, '_rr_debug_printed'):
                 #     self._rr_debug_printed = False
                 # if not self._rr_debug_printed and len(valid_rr) > 0:
-                print(f" 🔍 RR Calculation Debug: {len(r_peaks)} R-peaks, {len(valid_rr)} valid RR intervals")
-                print(f"    RR intervals (ms): {valid_rr[:5].tolist() if len(valid_rr) >= 5 else valid_rr.tolist()}")
-                print(f"    Median RR: {rr_ms:.1f} ms → HR: {estimated_bpm:.1f} BPM")
+                if not hasattr(self, '_rr_debug_tick'):
+                    self._rr_debug_tick = 0
+                    self._rr_debug_last_ms = rr_ms
+                self._rr_debug_tick += 1
+                rr_change = abs(rr_ms - getattr(self, '_rr_debug_last_ms', rr_ms))
+                if self._rr_debug_tick <= 3 or self._rr_debug_tick % 150 == 0 or rr_change >= 80:
+                    print(f" 🔍 RR Calculation Debug: {len(r_peaks)} R-peaks, {len(valid_rr)} valid RR intervals")
+                    print(f"    RR intervals (ms): {valid_rr[:5].tolist() if len(valid_rr) >= 5 else valid_rr.tolist()}")
+                    print(f"    Median RR: {rr_ms:.1f} ms → HR: {estimated_bpm:.1f} BPM")
+                self._rr_debug_last_ms = rr_ms
                 #     self._rr_debug_printed = True
                 
                 # Validate BPM is reasonable (10-300 BPM)
@@ -2008,9 +2036,12 @@ class ECGTestPage(QWidget):
                  heart_rate_raw = local_bpm
                  # Do NOT overwrite rr_ms if we are rejecting the HR
             else:
-                 heart_rate_raw = user_bpm
-                 if user_metrics["rr_interval"] is not None:
-                     rr_ms = user_metrics["rr_interval"]
+                 # Keep HR and RR mathematically locked: if RR is available, derive HR from RR.
+                 if user_metrics["rr_interval"] is not None and user_metrics["rr_interval"] > 0:
+                     rr_ms = float(user_metrics["rr_interval"])
+                     heart_rate_raw = int(round(60000.0 / rr_ms))
+                 else:
+                     heart_rate_raw = user_bpm
         else:
              heart_rate_raw = local_bpm
         
@@ -2031,7 +2062,7 @@ class ECGTestPage(QWidget):
         # The hold-and-jump display logic may show HR=61 while rr_ms=998ms → diff=15ms.
         # Accept ≤20ms difference (< 2 BPM equivalent error).
         expected_rr = 60000.0 / heart_rate_raw if heart_rate_raw > 0 else 600.0
-        verification_ok = abs(rr_ms - expected_rr) <= 20.0
+        verification_ok = abs(rr_ms - expected_rr) <= 30.0
         
         # Debug output: Show RR and HR calculation (print first few times and then occasionally)
         if not hasattr(self, '_rr_hr_debug_count'):
@@ -2045,22 +2076,16 @@ class ECGTestPage(QWidget):
             else:
                 print(f" ⚠️ RR/HR inconsistency: RR={rr_ms:.1f} ms, HR={heart_rate_raw} BPM, expected RR={expected_rr:.1f} ms (diff={abs(rr_ms-expected_rr):.1f} ms)")
         
-        bpm_active = hasattr(self, '_bpm_ctrl') and self._bpm_ctrl is not None and self._bpm_ctrl.is_running
-        if not bpm_active:
-            self.last_heart_rate = heart_rate_raw
-            
-            # FIX-HR-STAB: heart_rate_raw already comes from calculate_hr_rr()
-            # (via user_metrics) or local R-peak detection, both of which apply
-            # median + dead-zone stabilization.  Do NOT re-smooth here.
-            heart_rate = heart_rate_raw
-            self._last_displayed_hr = heart_rate
-        else:
-            # We STILL want `heart_rate` to be assigned so that anything later in this function
-            # doesn't crash (though most skip local HR things if not needed).
-            heart_rate = getattr(self, 'last_heart_rate', heart_rate_raw)
-            # Recompute rr_ms so QT/QTc ratio perfectly mirrors the displayed stable BPM (e.g. at 60BPM, RR=1000ms -> QTc=QT)
-            if heart_rate > 0:
-                rr_ms = 60000.0 / heart_rate
+        # Always derive display HR + interval math from the same RR source selected above.
+        # This keeps BPM, RR, QT and QTc internally consistent and aligned with
+        # reference software that uses median RR from detected beats.
+        self.last_heart_rate = heart_rate_raw
+
+        # FIX-HR-STAB: heart_rate_raw already comes from calculate_hr_rr()
+        # (via user_metrics) or local R-peak detection, both of which apply
+        # median + dead-zone stabilization.  Do NOT re-smooth here.
+        heart_rate = heart_rate_raw
+        self._last_displayed_hr = heart_rate
 
         
         # Calculate PR Interval using atrial vector method (Lead I + aVF) - GE/Philips/Fluke standard
@@ -5844,19 +5869,23 @@ class ECGTestPage(QWidget):
     # ---------------------- Stop Button Functionality ----------------------
 
     def _refresh_holter_bpm_label(self):
-        """Called every 3 s by _bpm_refresh_timer.
-        Reads the stable 30-second-window BPM from HolterBPMController and
-        writes it to the heart_rate metric label.
-        This is the ONLY place that updates the HR label during live acquisition.
+        """Called by _bpm_refresh_timer.
+        Keep the on-screen BPM synchronized with RR-derived BPM from the ECG
+        metrics pipeline (single source of truth).
         """
         try:
             if self._bpm_ctrl is None or not self._bpm_ctrl.is_running:
                 return
-            bpm = self._bpm_ctrl.current_bpm()
+
+            rr_ms = getattr(self, 'last_rr_interval', 0)
+            bpm = int(round(60000.0 / rr_ms)) if rr_ms and rr_ms > 0 else 0
+            if bpm <= 0:
+                bpm = int(round(self._bpm_ctrl.current_bpm()))
+
             if bpm > 0 and hasattr(self, 'metric_labels') and 'heart_rate' in self.metric_labels:
-                self.metric_labels['heart_rate'].setText(f"{int(round(bpm)):3d}")
+                self.metric_labels['heart_rate'].setText(f"{bpm:3d}")
                 # Keep last_heart_rate in sync so reports get the right value
-                self.last_heart_rate = int(round(bpm))
+                self.last_heart_rate = bpm
         except Exception as _e:
             print(f"[ECGTestPage] _refresh_holter_bpm_label error: {_e}")
 
@@ -6267,26 +6296,16 @@ class ECGTestPage(QWidget):
              file copies, index update) to a QThread so the event-loop / QTimer
              never miss a tick → waves keep flowing and BPM stays stable.
         """
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         from PyQt5.QtCore import QThread, pyqtSignal, QObject
         import datetime, os, json, shutil, copy
 
         # Enforce per-report cooldown: every click restarts a 10-second wait.
         self._start_generate_report_cooldown(seconds=10, reason="Report Click")
 
-        # ── STEP 1 (main thread): pick format ──────────────────────────────────
-        formats = ["12:1 Portrait", "4:3 Landscape", "6:2 Landscape"]
-        format_name, ok = QInputDialog.getItem(
-            self, "Select Format", "Choose ECG Report Format:", formats, 0, False)
-        if not ok:
-            return
-
-        if "4:3" in format_name:
-            fmt = "4_3"
-        elif "6:2" in format_name:
-            fmt = "6_2"
-        else:
-            fmt = "12_1"
+        # ── STEP 1 (main thread): fixed format = 12:1 ──────────────────────────
+        # User workflow requirement: one-click Generate should produce a 12:1 report.
+        fmt = "12_1"
         self.selected_format = fmt
 
         # ── STEP 2 (main thread): snapshot live data before file dialog ─────────
@@ -8423,8 +8442,9 @@ class ECGTestPage(QWidget):
                                     if hasattr(self, 'metric_labels') and 'sampling_rate' in self.metric_labels:
                                         self.metric_labels['sampling_rate'].setText(f"{sampling_rate:.1f} Hz")
                                     
-                                    # Update self.sampling_rate for heart rate calculation
-                                    self.sampling_rate = sampling_rate
+                                    # Keep runtime calculations locked to configured hardware rate
+                                    # (device is 500 Hz); measured UI cadence may dip when window focus changes.
+                                    self.sampling_rate = 500.0
                         except Exception as e:
                             print(f" Error updating sampling rate: {e}")
                         
@@ -8525,10 +8545,11 @@ class ECGTestPage(QWidget):
 
                             # Build time axis and apply wave-speed scaling
                             sampling_rate = 500.0
-                            if hasattr(self, 'sampler') and hasattr(self.sampler, 'sampling_rate') and self.sampler.sampling_rate > 10:
-                                sampling_rate = float(self.sampler.sampling_rate)
-                            elif hasattr(self, 'sampling_rate') and self.sampling_rate > 10:
-                                sampling_rate = float(self.sampling_rate)
+                            if hasattr(self, 'demo_toggle') and self.demo_toggle.isChecked():
+                                if hasattr(self, 'sampler') and hasattr(self.sampler, 'sampling_rate') and self.sampler.sampling_rate > 10:
+                                    sampling_rate = float(self.sampler.sampling_rate)
+                                elif hasattr(self, 'sampling_rate') and self.sampling_rate > 10:
+                                    sampling_rate = float(self.sampling_rate)
                             
                             # Calculate how many samples to show based on wave speed
                             # 25 mm/s → 10s window

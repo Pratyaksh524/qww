@@ -65,19 +65,17 @@ def _add_patient_header(master_drawing, full_name, age, gender, patient, date_ti
     phone_label = String(161.7 * mm, 253.6 * mm, f"Phone No: {phone_value}", fontSize=10, fontName="Helvetica-Bold", fillColor=colors.black)
     master_drawing.add(phone_label)
 def _build_vital_table(data):
-    HR = data.get('HR_avg',)
-    PR = data.get('PR',) 
-    QRS = data.get('QRS',)
-    QT = data.get('QT',)
-    QTc = data.get('QTc',)
-    ST = data.get('ST',)
-    QTcF = data.get('QTc_Fridericia') or data.get('QTcF') or 0
-    RR = int(60000 / HR) if HR and HR > 0 else 0
+    """Compact report summary: show only HR/PR/QRS/QT/QTc."""
+    HR = _safe_float(data.get('HR_avg') or data.get('HR') or data.get('HR_bpm'), 0)
+    PR = _safe_float(data.get('PR'), 0)
+    QRS = _safe_float(data.get('QRS'), 0)
+    QT = _safe_float(data.get('QT'), 0)
+    QTc = _safe_float(data.get('QTc'), 0)
+
     vital_table_data = [
-        [f"HR : {int(round(HR))} bpm", f"QT: {int(round(QT))} ms"],
+        [f"HR : {int(round(HR))} bpm", f"QT : {int(round(QT))} ms"],
         [f"PR : {int(round(PR))} ms", f"QTc: {int(round(QTc))} ms"],
-        [f"QRS: {int(round(QRS))} ms", f"ST: {int(round(ST))} ms"],
-        [f"RR : {int(round(RR))} ms", ""]
+        [f"QRS: {int(round(QRS))} ms", ""]
     ]
     vital_params_table = Table(vital_table_data, colWidths=[100, 100])
     vital_params_table.setStyle(TableStyle([
@@ -2033,9 +2031,12 @@ def generate_ecg_report(
                     from ecg.ecg_filters import apply_ecg_filters
                     from scipy.ndimage import gaussian_filter1d as _gf1d
                     
-                    ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
-                    emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
-                    dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    if settings_manager is not None:
+                        ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
+                        emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
+                        dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    else:
+                        ac_setting, emg_setting, dft_setting = "50", "150", "0.5"
                     
                     # Nyquist guard: AC notch at F Hz requires sampling rate > 2*F Hz
                     if ac_setting in ("50", "60"):
@@ -2567,9 +2568,12 @@ def generate_ecg_report(
                     from ecg.ecg_filters import apply_ecg_filters
                     from scipy.ndimage import gaussian_filter1d as _gf1d
                     
-                    ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
-                    emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
-                    dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    if settings_manager is not None:
+                        ac_setting  = str(settings_manager.get_setting("filter_ac",  "50")).strip()
+                        emg_setting = str(settings_manager.get_setting("filter_emg", "150")).strip()
+                        dft_setting = str(settings_manager.get_setting("filter_dft", "0.5")).strip()
+                    else:
+                        ac_setting, emg_setting, dft_setting = "50", "150", "0.5"
                     
                     # Nyquist guard: AC notch at F Hz requires sampling rate > 2*F Hz
                     if ac_setting in ("50", "60"):
@@ -3273,10 +3277,12 @@ def generate_ecg_report(
     qrs_mm = extract_axis_value(qrs_axis_deg)
     t_mm = extract_axis_value(t_axis_deg)
     
-    # SECOND COLUMN - P/QRS/T Axis (ABOVE ECG GRAPH - same position)
-    p_qrs_label = String(84.7 * mm, 284.1 * mm, f"P/QRS/T  : {p_axis_display}/{qrs_axis_display}/{t_axis_display}°",  # Changed to axis values
-                         fontSize=10, fontName="Helvetica", fillColor=colors.black)
-    master_drawing.add(p_qrs_label)
+    # SECOND COLUMN - P/QRS/T Axis (optional: hidden in compact report mode)
+    show_extended_header_metrics = bool(data.get('show_extended_header_metrics', True))
+    if show_extended_header_metrics:
+        p_qrs_label = String(84.7 * mm, 284.1 * mm, f"P/QRS/T  : {p_axis_display}/{qrs_axis_display}/{t_axis_display}°",
+                             fontSize=10, fontName="Helvetica", fillColor=colors.black)
+        master_drawing.add(p_qrs_label)
 
     # Get RV5 and SV1 amplitudes
     # PRIORITY: Use standardized values from ECG test page if available
@@ -3407,18 +3413,21 @@ def generate_ecg_report(
     # Use 3 decimal places for precision (not rounded to integers)
     rv5_sv_label = String(84.7 * mm, 279.0 * mm, f"RV5/SV1  : {rv5_mv:.3f} mV/{sv1_mv:.3f} mV",  # SV1 will show as negative
                          fontSize=10, fontName="Helvetica", fillColor=colors.black)
-    master_drawing.add(rv5_sv_label)
+    if show_extended_header_metrics:
+        master_drawing.add(rv5_sv_label)
 
     # Calculate RV5+SV1 = RV5 + abs(SV1) (GE/Philips standard)
     # CRITICAL: Calculate from unrounded values to avoid rounding errors
-    # SV1 is negative, so RV5+SV1 = RV5 + (SV1) for Sokolow-Lyon index
-    rv5_sv1_sum = rv5_mv + (sv1_mv)  # RV5 + (SV1) as per GE/Philips standard
+    # Sokolow-Lyon index uses RV5 + |SV1| (both in mV).
+    # SV1 is typically negative by sign convention, so use absolute magnitude.
+    rv5_sv1_sum = rv5_mv + abs(sv1_mv)
 
     # SECOND COLUMN - RV5+SV1 (ABOVE ECG GRAPH - shifted further up)
     # Use 3 decimal places for precision
     rv5_sv1_sum_label = String(84.7 * mm, 273.9 * mm, f"RV5+SV1 : {rv5_sv1_sum:.3f} mV",
                                fontSize=10, fontName="Helvetica", fillColor=colors.black)
-    master_drawing.add(rv5_sv1_sum_label)
+    if show_extended_header_metrics:
+        master_drawing.add(rv5_sv1_sum_label)
 
     # ── RV6 / SV2 calculation ────────────────────────────────────────────────
     # RV6 = R-wave amplitude in V6 (index 11)
@@ -3472,7 +3481,8 @@ def generate_ecg_report(
     rv6_sv2_label = String(84.7 * mm, 268.8 * mm,
                             f"RV6/SV2  : {abs(rv6_mv):.3f} mV/{abs(sv2_mv):.3f} mV",
                             fontSize=10, fontName="Helvetica", fillColor=colors.black)
-    master_drawing.add(rv6_sv2_label)
+    if show_extended_header_metrics:
+        master_drawing.add(rv6_sv2_label)
 
     # NOTE: QTcF is already displayed at 262.5mm (where ST was removed) via qtcf_header_label above.
     # The old qtcf_label at 268.3mm has been removed to prevent overlap with RV6/SV2 at 268.8mm.

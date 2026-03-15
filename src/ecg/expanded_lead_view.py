@@ -20,12 +20,13 @@ from matplotlib.figure import Figure
 import matplotlib.patches as patches
 from .arrhythmia_detector import ArrhythmiaDetector
 try:
-    from .ecg_filters import extract_respiration, estimate_baseline_drift, apply_ac_filter, apply_emg_filter
+    from .ecg_filters import extract_respiration, estimate_baseline_drift, apply_ac_filter, apply_emg_filter, apply_ecg_filters
 except ImportError:
     extract_respiration = None
     estimate_baseline_drift = None
     apply_ac_filter = None
     apply_emg_filter = None
+    apply_ecg_filters = None
 try:
     from .clinical_measurements import (
         build_median_beat, get_tp_baseline, measure_pr_from_median_beat,
@@ -1172,7 +1173,7 @@ class ExpandedLeadView(QDialog):
             self.ax.set_ylim(y_min, y_max)
 
         if hasattr(self, 'canvas'):
-            self.canvas.draw()
+            self.canvas.draw_idle()
     
     def create_metrics_panel(self, parent_layout):
         """Create the metrics panel"""
@@ -1286,6 +1287,33 @@ class ExpandedLeadView(QDialog):
         """Stop live data updates"""
         self.is_live = False
         self.timer.stop()
+
+    def _resolve_runtime_sampling_rate(self, parent=None):
+        """Return stable runtime sampling rate for plotting/analysis.
+
+        Hardware mode is locked to 500 Hz. Demo mode may use demo/detected rate.
+        This prevents waveform deformation when UI focus changes reduce measured
+        UI callback cadence.
+        """
+        try:
+            p = parent if parent is not None else (self.parent() if hasattr(self, 'parent') else None)
+            is_demo = bool(getattr(self, 'demo_mode_active', False))
+            if p is not None and hasattr(p, 'demo_toggle') and p.demo_toggle is not None:
+                try:
+                    is_demo = bool(p.demo_toggle.isChecked())
+                except Exception:
+                    pass
+
+            if not is_demo:
+                return 500.0
+
+            if p is not None and hasattr(p, 'demo_fs') and p.demo_fs:
+                return float(p.demo_fs)
+            if p is not None and hasattr(p, 'sampler') and getattr(p.sampler, 'sampling_rate', 0):
+                return float(p.sampler.sampling_rate)
+        except Exception:
+            pass
+        return 500.0
     
     def update_live_data(self):
         """Update ECG data from parent (hardware)"""
@@ -1295,16 +1323,11 @@ class ExpandedLeadView(QDialog):
         try:
             # Get current data from parent ECG test page
             parent = self.parent()
-            # Align sampling rate with parent so HR/RR match dashboard
+            # Keep expanded-view sampling stable across focus/tab switches.
             try:
-                if hasattr(parent, 'sampler') and getattr(parent.sampler, 'sampling_rate', 0):
-                    self.sampling_rate = float(parent.sampler.sampling_rate)
-                    self.analyzer.fs = self.sampling_rate
-                    self.arrhythmia_detector.fs = self.sampling_rate
-                elif hasattr(parent, 'sampling_rate') and parent.sampling_rate:
-                    self.sampling_rate = float(parent.sampling_rate)
-                    self.analyzer.fs = self.sampling_rate
-                    self.arrhythmia_detector.fs = self.sampling_rate
+                self.sampling_rate = float(self._resolve_runtime_sampling_rate(parent))
+                self.analyzer.fs = self.sampling_rate
+                self.arrhythmia_detector.fs = self.sampling_rate
             except Exception:
                 pass
             if hasattr(parent, 'data') and len(parent.data) > 0:
@@ -1724,42 +1747,36 @@ class ExpandedLeadView(QDialog):
             # Clinical signal (raw) is untouched; display_signal is for plotting only.
             display_signal = window_signal.copy()
             try:
-                # Mode toggle (default clean)
+                # Keep expanded view filter behavior aligned with 12-box defaults.
+                # Default AC notch is 50 Hz; if user turns it off, both views follow that.
+                ac_opt = '50'
+                emg_opt = 'off'
+                dft_opt = 'off'
+                if hasattr(self._parent, 'settings_manager') and self._parent.settings_manager is not None:
+                    ac_opt = str(self._parent.settings_manager.get_setting('filter_ac', '50')).strip()
+                    emg_opt = str(self._parent.settings_manager.get_setting('filter_emg', 'off')).strip()
+                    dft_opt = str(self._parent.settings_manager.get_setting('filter_dft', 'off')).strip()
+
+                if apply_ecg_filters is not None:
+                    display_signal = apply_ecg_filters(
+                        signal=display_signal,
+                        sampling_rate=float(self.sampling_rate),
+                        ac_filter=ac_opt if ac_opt in ('50', '60') else None,
+                        emg_filter=emg_opt if emg_opt not in ('off', '') else None,
+                        dft_filter=dft_opt if dft_opt not in ('off', '') else None,
+                    )
+                else:
+                    if apply_emg_filter is not None and emg_opt not in ('off', ''):
+                        display_signal = apply_emg_filter(display_signal, float(self.sampling_rate), emg_opt)
+                    if apply_ac_filter is not None and ac_opt in ('50', '60'):
+                        display_signal = apply_ac_filter(display_signal, float(self.sampling_rate), ac_opt)
+
+                # Optional clean-view mode can further suppress respiration drift.
                 if self.use_clean_view:
-                    # Clean display: Just remove respiration, don't apply bandpass filtering
-                    # This keeps waves straight like live display
                     display_signal = self._remove_respiration_display(display_signal, fs=self.sampling_rate, window_sec=2.0)
-                # clinical view leaves display_signal untouched
             except Exception as filter_error:
                 print(f" Expanded view display filter error: {filter_error}")
 
-            # Apply EMG filter from settings for display if enabled
-            try:
-                emg_applied = False
-                emg_suppresses_ac = False
-                if 'apply_emg_filter' in globals() and apply_emg_filter is not None and hasattr(self._parent, 'settings_manager'):
-                    emg_opt = str(self._parent.settings_manager.get_setting('filter_emg', '150')).strip()
-                    if emg_opt and emg_opt.lower() != 'off':
-                         display_signal = apply_emg_filter(display_signal, float(self.sampling_rate), emg_opt)
-                         emg_applied = True
-                         try:
-                             if float(emg_opt) < 60:
-                                 emg_suppresses_ac = True
-                         except ValueError:
-                             pass
-            except Exception as _emg_err:
-                 print(f" Expanded view EMG filter error: {_emg_err}")
-
-            # Apply AC filter (50/60 Hz) from settings for display
-            try:
-                # Apply AC filter if enabled
-                if (not emg_applied or not emg_suppresses_ac) and 'apply_ac_filter' in globals() and apply_ac_filter is not None and hasattr(self._parent, 'settings_manager'):
-                    ac_opt = str(self._parent.settings_manager.get_setting('filter_ac', '50')).strip()
-                    if ac_opt in ('50', '60'):
-                        display_signal = apply_ac_filter(display_signal, float(self.sampling_rate), ac_opt)
-            except Exception as _ac_err:
-                print(f" Expanded view AC filter error: {_ac_err}")
-            
             # After all filters, crop back to the exact visible window to remove
             # edge transients introduced by filtering the padded segment.
             try:
@@ -1771,11 +1788,14 @@ class ExpandedLeadView(QDialog):
 
             try:
                 from scipy.ndimage import gaussian_filter1d
+                sigma = 0.8
+                if hasattr(self._parent, 'SMOOTH_SIGMA'):
+                    sigma = float(self._parent.SMOOTH_SIGMA)
                 if len(display_signal) > 5:
-                    display_signal = gaussian_filter1d(display_signal, sigma=1.5)
+                    display_signal = gaussian_filter1d(display_signal, sigma=sigma)
             except Exception:
                 if len(display_signal) > 5:
-                    kernel_size = 7
+                    kernel_size = 3
                     kernel = np.ones(kernel_size) / kernel_size
                     display_signal = np.convolve(display_signal, kernel, mode="same")
 
@@ -1789,14 +1809,21 @@ class ExpandedLeadView(QDialog):
             gain = wave_gain_mm / 10.0  # 10mm/mV = 1.0x baseline
 
             raw_center = (np.median(display_signal) if len(display_signal) > 0 else 0.0)
-            centered = display_signal - raw_center
+            # Stabilize baseline center to avoid visible deformation during UI stalls/focus switches
+            if not hasattr(self, '_display_center_ema'):
+                self._display_center_ema = raw_center
+            center_alpha = 0.12
+            self._display_center_ema = (center_alpha * raw_center) + ((1.0 - center_alpha) * self._display_center_ema)
+
+            centered = display_signal - self._display_center_ema
             scaled = centered * (gain * self.amplification)
             visual_gain = 1.5
             adc_center = -2048 if str(self.lead_name).upper() == 'AVR' else 2048
             display_adc = adc_center + scaled * visual_gain
             
             # Create time array matching the signal length
-            time = np.arange(len(display_adc), dtype=float) / self.sampling_rate + (start_idx / self.sampling_rate)
+            fs = max(1.0, float(self.sampling_rate))
+            time = np.arange(len(display_adc), dtype=float) / fs + (start_idx / fs)
 
             ylim_low, ylim_high = (-4096.0, 0.0) if str(self.lead_name).upper() == 'AVR' else (0.0, 4096.0)
 
@@ -2061,7 +2088,7 @@ class ExpandedLeadView(QDialog):
                 except Exception:
                     pass
 
-            self.canvas.draw()
+            self.canvas.draw_idle()
         except Exception as e:
             print(f"Error updating plot: {e}")
     
@@ -2617,7 +2644,7 @@ class ExpandedLeadView(QDialog):
             if leg is not None:
                 leg.remove()
 
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
         except Exception as e:
             print(f"Error updating plot markers: {e}")
