@@ -3129,6 +3129,12 @@ class Dashboard(QWidget):
         import os
         import copy
 
+        # Prevent overlapping report jobs (double-click / repeated clicks)
+        if getattr(self, '_report_thread', None) is not None and self._report_thread.isRunning():
+            QMessageBox.information(self, "Report In Progress",
+                                    "Report generation is already running. Please wait for it to finish.")
+            return
+
         # ── STEP 1: Freeze ALL metric values RIGHT NOW (before any background work) ──
         # This is the key fix for "different values each click even though machine
         # sends constant data" — the live update timer overwrites labels between calls.
@@ -3563,8 +3569,8 @@ class Dashboard(QWidget):
 
         self._report_worker.finished.connect(_on_finished)
         self._report_worker.failed.connect(_on_failed)
-        self._report_thread.start()   # ← ECG waves keep scrolling smoothly from here
-        self._report_thread.start()   # ← ECG waves keep scrolling smoothly from here
+        # Run worker with low OS scheduling priority to minimize impact on live ECG UI refresh.
+        self._report_thread.start(QThread.LowPriority)
 
 
 
