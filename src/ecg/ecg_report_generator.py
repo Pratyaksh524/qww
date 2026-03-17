@@ -124,7 +124,13 @@ def _safe_float(value, default=None):
 
 
 def _align_report_intervals_to_reference(data: dict) -> None:
-    """Align report interval fields to HR reference table for stable report output."""
+    """Fill missing report interval fields from HR reference table.
+
+    IMPORTANT:
+    We must not overwrite measured values (QT/QTc/PR/QRS/RR) with reference
+    table values. Overwriting caused clinically incorrect report numbers,
+    especially for QTc at low/high heart rates.
+    """
     try:
         hr_val = _safe_float(data.get("HR_bpm") or data.get("Heart_Rate") or data.get("HR"), 0)
         if not hr_val or hr_val <= 0:
@@ -134,13 +140,19 @@ def _align_report_intervals_to_reference(data: dict) -> None:
         if not ref:
             return
 
-        # For report output we prefer deterministic, calibration-aligned values
-        # so printed intervals match the selected reference profile.
-        data["RR_ms"] = int(round(ref["RR"]))
-        data["PR"] = int(round(ref["PR"]))
-        data["QRS"] = int(round(ref["QRS"]))
-        data["QT"] = int(round(ref["QT"]))
-        data["QTc"] = int(round(ref["QTc"]))
+        # Only backfill missing/invalid values.
+        # Measured values from analysis pipeline always take priority.
+        mapping = {
+            "RR_ms": "RR",
+            "PR": "PR",
+            "QRS": "QRS",
+            "QT": "QT",
+            "QTc": "QTc",
+        }
+        for data_key, ref_key in mapping.items():
+            current = _safe_float(data.get(data_key), 0)
+            if not current or current <= 0:
+                data[data_key] = int(round(ref[ref_key]))
     except Exception:
         return
 

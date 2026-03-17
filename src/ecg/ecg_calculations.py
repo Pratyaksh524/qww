@@ -197,7 +197,7 @@ def apply_interval_smoothing(value: int, buffer_key: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# QTc — BAZETT ONLY (sabhi heart rates par)
+# QTc formulas
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calculate_qtc_bazett(qt_ms: float, rr_ms: float) -> int:
@@ -215,13 +215,29 @@ def calculate_qtc_bazett(qt_ms: float, rr_ms: float) -> int:
 
 
 def calculate_qtcf_interval(qt_ms: float, rr_ms: float) -> int:
-    """QTcF = QT / RR^(1/3)  (Fridericia — kept for API compatibility only)."""
-    return calculate_qtc_bazett(qt_ms, rr_ms)   # redirected to Bazett
+    """QTcF = QT / RR^(1/3)  (Fridericia)."""
+    try:
+        if not qt_ms or qt_ms <= 0 or not rr_ms or rr_ms <= 0:
+            return 0
+        qt_sec = qt_ms / 1000.0
+        rr_sec = rr_ms / 1000.0
+        qtcf_sec = qt_sec / (rr_sec ** (1.0 / 3.0))
+        return int(round(qtcf_sec * 1000.0))
+    except Exception as e:
+        print(f" ⚠️ QTcF Fridericia error: {e}")
+        return 0
 
 
 def calculate_qtc_auto(qt_ms: float, rr_ms: float, heart_rate: int,
                         instance_id: Optional[str] = None) -> int:
-    """Always uses Bazett formula regardless of heart rate."""
+    """Select QT correction formula by heart-rate range.
+
+    HR < 60 bpm  -> Fridericia
+    HR > 100 bpm -> Fridericia
+    otherwise    -> Bazett
+    """
+    if heart_rate < 60 or heart_rate > 100:
+        return calculate_qtcf_interval(qt_ms, rr_ms)
     return calculate_qtc_bazett(qt_ms, rr_ms)
 
 
