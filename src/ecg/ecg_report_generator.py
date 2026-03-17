@@ -1374,23 +1374,26 @@ def generate_ecg_report(
         except Exception:
             return default
 
-    # ==================== STEP 1: Get HR_bpm from metrics.json (PRIORITY) ====================
-    # Priority: metrics.json  latest HR_bpm  (calculation-based beats  )
+    # ==================== STEP 1: Resolve HR_bpm with click-snapshot priority ====================
+    # IMPORTANT:
+    # Report generation is triggered from a live dashboard snapshot. Those values
+    # must win over historical metrics.json values; otherwise, first-click report
+    # can use stale HR/RR and produce wrong QTc/QTcF. metrics.json is fallback only.
     latest_metrics = load_latest_metrics_entry(reports_dir)
     hr_bpm_value = 0
     
-    # Priority 1: metrics.json  latest HR_bpm (CALCULATION-BASED BEATS   REQUIRED)
-    if latest_metrics:
-        hr_bpm_value = _safe_int(latest_metrics.get("HR_bpm"))
-        if hr_bpm_value > 0:
-            print(f" Using HR_bpm from metrics.json: {hr_bpm_value} bpm (for calculation-based beats)")
-    
-    # Priority 2: Fallback to data parameter
+    # Priority 1: current report payload (captured at click time)
     if hr_bpm_value == 0:
         hr_candidate = data.get("HR_bpm") or data.get("Heart_Rate") or data.get("HR")
         hr_bpm_value = _safe_int(hr_candidate)
         if hr_bpm_value > 0:
-            print(f" Using HR_bpm from data parameter: {hr_bpm_value} bpm")
+            print(f" Using HR_bpm from report snapshot: {hr_bpm_value} bpm")
+
+    # Priority 2: metrics.json latest (fallback only)
+    if hr_bpm_value == 0 and latest_metrics:
+        hr_bpm_value = _safe_int(latest_metrics.get("HR_bpm"))
+        if hr_bpm_value > 0:
+            print(f" Using HR_bpm from metrics.json fallback: {hr_bpm_value} bpm")
     
     # Priority 3: Fallback to HR_avg
     if hr_bpm_value == 0 and data.get("HR_avg"):
@@ -1408,13 +1411,18 @@ def generate_ecg_report(
 
     _align_report_intervals_to_reference(data)
 
-    # Compute QTc / QTcF from QT and RR using standard formulas for report consistency:
+    # Compute QTc / QTcF from QT and RR only when missing:
     #   QTc  (Bazett)     = QT / sqrt(RR)
     #   QTcF (Fridericia) = QT / cbrt(RR)
     # where QT and RR are in seconds.
     try:
         qt_ms = _safe_float(data.get("QT"))
         rr_ms = _safe_float(data.get("RR_ms"))
+        existing_qtc = _safe_float(data.get("QTc"), 0)
+        existing_qtcf = _safe_float(
+            data.get("QTc_Fridericia") or data.get("QTcF") or data.get("QTcF_ms"),
+            0,
+        )
         qtc_bazett_ms = None
         qtc_frid_ms = None
         if qt_ms and qt_ms > 0 and rr_ms and rr_ms > 0:
@@ -1422,9 +1430,9 @@ def generate_ecg_report(
             rr_sec = rr_ms / 1000.0
             qtc_bazett_ms = qt_sec / (rr_sec ** 0.5) * 1000.0
             qtc_frid_ms = qt_sec / (rr_sec ** (1.0 / 3.0)) * 1000.0
-        if qtc_bazett_ms and qtc_bazett_ms > 0:
+        if (not existing_qtc or existing_qtc <= 0) and qtc_bazett_ms and qtc_bazett_ms > 0:
             data["QTc"] = qtc_bazett_ms
-        if qtc_frid_ms and qtc_frid_ms > 0:
+        if (not existing_qtcf or existing_qtcf <= 0) and qtc_frid_ms and qtc_frid_ms > 0:
             data["QTc_Fridericia"] = qtc_frid_ms
     except Exception:
         pass
