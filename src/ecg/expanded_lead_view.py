@@ -1265,7 +1265,7 @@ class ExpandedLeadView(QDialog):
     def start_live_mode(self):
         """Start live data updates"""
         self.is_live = True
-        self.timer.start(100)  # Update every 100ms
+        self.timer.start(16)  # ~60 FPS target for smoother 500 Hz hardware rendering
 
     def resizeEvent(self, event):
         """Respond to window resizing by scaling fonts and components."""
@@ -1737,6 +1737,20 @@ class ExpandedLeadView(QDialog):
             visible_len = end_idx - start_idx
             visible_offset = start_idx - padded_start
 
+            # Add synthetic reflection padding when the visible window touches the
+            # newest or oldest samples. This prevents display-filter ringing at the
+            # graph edges, especially the live right edge seen in the expanded view.
+            left_missing = max(0, pad_samples - (start_idx - padded_start))
+            right_missing = max(0, pad_samples - (padded_end - end_idx))
+            if left_missing > 0 or right_missing > 0:
+                pad_mode = 'reflect' if len(padded_signal) > 1 else 'edge'
+                padded_signal = np.pad(
+                    padded_signal,
+                    (left_missing, right_missing),
+                    mode=pad_mode,
+                )
+                visible_offset += left_missing
+
             window_signal = padded_signal  # use padded for filtering
             
             # Ensure we have valid data
@@ -1820,6 +1834,13 @@ class ExpandedLeadView(QDialog):
             visual_gain = 1.5
             adc_center = -2048 if str(self.lead_name).upper() == 'AVR' else 2048
             display_adc = adc_center + scaled * visual_gain
+
+            # Frame blending reduces visible jitter when rendering 500 Hz hardware
+            # data at 50/60 FPS and keeps the expanded view smooth after focus changes.
+            prev_frame = getattr(self, '_display_frame_cache', None)
+            if prev_frame is not None and len(prev_frame) == len(display_adc):
+                display_adc = (0.35 * display_adc) + (0.65 * prev_frame)
+            self._display_frame_cache = np.asarray(display_adc, dtype=float).copy()
             
             # Create time array matching the signal length
             fs = max(1.0, float(self.sampling_rate))
