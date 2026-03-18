@@ -422,13 +422,17 @@ class ExpandedLeadView(QDialog):
         self.manual_view = False
         self.history_slider_active = False
 
-	    # Demo mode settings - sync with parent's demo manager
+        # Demo mode settings - sync with parent's demo manager
         self.demo_mode_active = False
         self.demo_manager = None
         if parent and hasattr(parent, 'demo_manager') and hasattr(parent, 'demo_toggle'):
             self.demo_mode_active = parent.demo_toggle.isChecked()
             self.demo_manager = parent.demo_manager
             print(f" Expanded view: Demo mode is {'ON' if self.demo_mode_active else 'OFF'}")
+
+        # Track the rendered history window so display stabilization can reset
+        # when the user jumps to a different portion of the recording.
+        self._last_window_bounds = None
         
         # Live data update
         self.timer = QTimer()
@@ -1620,6 +1624,37 @@ class ExpandedLeadView(QDialog):
             return signal - baseline
         except Exception:
             return signal
+
+    def _smooth_display_signal(self, signal, sigma=0.8):
+        """Smooth plotted data without introducing right-edge jumps.
+
+        The expanded lead window usually follows the newest samples. If we
+        smooth with implicit zero-padding, the newest samples can dip or spike
+        at the end of the plot. Mirror-padding avoids that visible tail jump.
+        """
+        if signal is None:
+            return signal
+
+        arr = np.asarray(signal, dtype=float)
+        if arr.size <= 5:
+            return arr
+
+        pad = max(3, int(np.ceil(max(0.5, float(sigma)) * 3)))
+        if arr.size <= pad:
+            return arr
+
+        try:
+            from scipy.ndimage import gaussian_filter1d
+
+            padded = np.pad(arr, pad_width=pad, mode='reflect')
+            smoothed = gaussian_filter1d(padded, sigma=float(sigma), mode='nearest')
+            return smoothed[pad:-pad]
+        except Exception:
+            kernel_size = max(3, min(7, (pad * 2) + 1))
+            kernel = np.ones(kernel_size, dtype=float) / float(kernel_size)
+            padded = np.pad(arr, pad_width=pad, mode='edge')
+            smoothed = np.convolve(padded, kernel, mode='same')
+            return smoothed[pad:-pad]
     
     def calculate_respiration_ylim(self, respiration_signal):
         """Calculate dynamic Y-limits for respiration using percentiles.
@@ -1736,6 +1771,7 @@ class ExpandedLeadView(QDialog):
             # This is the portion we will actually display after filtering
             visible_len = end_idx - start_idx
             visible_offset = start_idx - padded_start
+            current_window_bounds = (start_idx, end_idx)
 
             window_signal = padded_signal  # use padded for filtering
             
@@ -1786,18 +1822,10 @@ class ExpandedLeadView(QDialog):
                 # In case of any indexing issues, fall back to the original (unpadded) slice
                 display_signal = self.ecg_data[start_idx:end_idx]
 
-            try:
-                from scipy.ndimage import gaussian_filter1d
-                sigma = 0.8
-                if hasattr(self._parent, 'SMOOTH_SIGMA'):
-                    sigma = float(self._parent.SMOOTH_SIGMA)
-                if len(display_signal) > 5:
-                    display_signal = gaussian_filter1d(display_signal, sigma=sigma)
-            except Exception:
-                if len(display_signal) > 5:
-                    kernel_size = 3
-                    kernel = np.ones(kernel_size) / kernel_size
-                    display_signal = np.convolve(display_signal, kernel, mode="same")
+            sigma = 0.8
+            if hasattr(self._parent, 'SMOOTH_SIGMA'):
+                sigma = float(self._parent.SMOOTH_SIGMA)
+            display_signal = self._smooth_display_signal(display_signal, sigma=sigma)
 
             # ---------------- DISPLAY SCALING (apply gain ONCE, last) ----------------
             wave_gain_mm = 10.0
@@ -1808,12 +1836,25 @@ class ExpandedLeadView(QDialog):
                 wave_gain_mm = 10.0
             gain = wave_gain_mm / 10.0  # 10mm/mV = 1.0x baseline
 
-            raw_center = (np.median(display_signal) if len(display_signal) > 0 else 0.0)
-            # Stabilize baseline center to avoid visible deformation during UI stalls/focus switches
-            if not hasattr(self, '_display_center_ema'):
+            center_slice = display_signal
+            if len(display_signal) > 20:
+                edge_trim = max(1, min(len(display_signal) // 10, int(self.sampling_rate * 0.2)))
+                if (len(display_signal) - (edge_trim * 2)) >= 5:
+                    center_slice = display_signal[edge_trim:-edge_trim]
+
+            raw_center = (np.median(center_slice) if len(center_slice) > 0 else 0.0)
+            # Stabilize baseline center to avoid visible deformation during UI stalls/focus switches.
+            # Reset if the user jumps to a different history segment so stale EMA
+            # state cannot pull the newest edge of the trace.
+            if (
+                not hasattr(self, '_display_center_ema')
+                or self._last_window_bounds is None
+                or abs(current_window_bounds[0] - self._last_window_bounds[0]) > max(1, int(self.sampling_rate * 0.5))
+            ):
                 self._display_center_ema = raw_center
             center_alpha = 0.12
             self._display_center_ema = (center_alpha * raw_center) + ((1.0 - center_alpha) * self._display_center_ema)
+            self._last_window_bounds = current_window_bounds
 
             centered = display_signal - self._display_center_ema
             scaled = centered * (gain * self.amplification)
@@ -1874,18 +1915,9 @@ class ExpandedLeadView(QDialog):
                             quality_text = "Quality: Clean"
                     except Exception:
                         pass
-                    # Apply light smoothing for smooth wave appearance
-                    try:
-                        from scipy.ndimage import gaussian_filter1d
-                        if len(display_adc) > 3:
-                            # Light Gaussian smoothing (sigma=0.5) for smooth waves without losing detail
-                            display_adc = gaussian_filter1d(display_adc, sigma=0.5)
-                    except (ImportError, Exception):
-                        # Fallback: simple moving average if scipy not available
-                        if len(display_adc) > 3:
-                            kernel_size = 3
-                            kernel = np.ones(kernel_size) / kernel_size
-                            display_adc = np.convolve(display_adc, kernel, mode='same')
+                    # Apply light smoothing for smooth wave appearance without
+                    # zero-padding artifacts at the newest/right edge.
+                    display_adc = self._smooth_display_signal(display_adc, sigma=0.5)
                     
                     # Plot only valid points
                     if np.all(valid_mask):
@@ -1896,16 +1928,9 @@ class ExpandedLeadView(QDialog):
                         time_valid = time[valid_mask]
                         scaled_valid = display_adc[valid_mask]
                         if len(time_valid) > 1:
-                            # Apply smoothing to valid segment
-                            try:
-                                from scipy.ndimage import gaussian_filter1d
-                                if len(scaled_valid) > 3:
-                                    scaled_valid = gaussian_filter1d(scaled_valid, sigma=0.5)
-                            except (ImportError, Exception):
-                                if len(scaled_valid) > 3:
-                                    kernel_size = 3
-                                    kernel = np.ones(kernel_size) / kernel_size
-                                    scaled_valid = np.convolve(scaled_valid, kernel, mode='same')
+                            # Apply smoothing to valid segment without edge
+                            # artifacts at the segment tail.
+                            scaled_valid = self._smooth_display_signal(scaled_valid, sigma=0.5)
                             self.ax.plot(time_valid, scaled_valid, color='#000080', linewidth=0.7, label='ECG Signal', zorder=1, alpha=waveform_alpha, antialiased=True)  # Dark Navy Blue
                 else:
                     print(f" All data is NaN in expanded view for lead {self.lead_name}")
