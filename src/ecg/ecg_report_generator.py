@@ -23,6 +23,7 @@ ECG_SMALL_BOX_MM = ECG_LARGE_BOX_MM / 5.0
 # Scale wave speed so 1 second equals 5 large boxes at 25 mm/s on 40-box grid
 ECG_SPEED_SCALE = ECG_LARGE_BOX_MM / ECG_BASE_BOX_MM
 STANDARD_REPORT_WINDOW_SECONDS = 10.0
+REPORT_STRIP_WIDTH_POINTS = 460
 
 
 def _samples_for_standard_report_window(sampling_rate):
@@ -580,7 +581,7 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
     return filtered
 
 
-def _estimate_rr_from_report_strip(ecg_test_page, ecg_data_file, sampling_rate, settings_manager, width_points=460):
+def _estimate_rr_from_report_strip(ecg_test_page, ecg_data_file, sampling_rate, settings_manager, width_points=REPORT_STRIP_WIDTH_POINTS):
     """Estimate RR from the same Lead II strip window used in the 12:1 report."""
     try:
         leads_payload, fs = _collect_12_lead_payload(
@@ -717,7 +718,7 @@ from reportlab.graphics.shapes import Drawing, Group, Line, Rect
 from reportlab.graphics.charts.lineplots import LinePlot
 from reportlab.lib.units import mm
 
-def create_reportlab_ecg_drawing(lead_name, width=460, height=45):
+def create_reportlab_ecg_drawing(lead_name, width=REPORT_STRIP_WIDTH_POINTS, height=45):
     """
     Create ECG drawing using ReportLab (NO matplotlib - NO white background issues)
     Returns: ReportLab Drawing with guaranteed pink background
@@ -729,39 +730,47 @@ def create_reportlab_ecg_drawing(lead_name, width=460, height=45):
     bg_rect = Rect(0, 0, width, height, fillColor=bg_color, strokeColor=None)
     drawing.add(bg_rect)
     
-    # STEP 2: Draw pink ECG grid lines (even lighter colors)
+    # STEP 2: Draw pink ECG grid lines using the same 40-box report paper scale
+    # used by waveform timing (1 large box = 5.25mm, 1 small box = 1.05mm).
     light_grid_color = colors.HexColor("#ffd1d1")  # Darker minor grid
     major_grid_color = colors.HexColor("#ffb3b3")   # Darker major grid
-    
-    # Minor grid lines (1mm spacing equivalent)
-    minor_spacing_x = width / 60  # 60 divisions across width
-    minor_spacing_y = height / 20  # 20 divisions across height
+
+    minor_spacing_x = ECG_SMALL_BOX_MM * mm
+    minor_spacing_y = ECG_SMALL_BOX_MM * mm
     
     # Vertical minor grid lines
-    for i in range(61):
+    for i in range(int(width / minor_spacing_x) + 2):
         x_pos = i * minor_spacing_x
+        if x_pos > width:
+            break
         line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
         drawing.add(line)
     
     # Horizontal minor grid lines
-    for i in range(21):
+    for i in range(int(height / minor_spacing_y) + 2):
         y_pos = i * minor_spacing_y
+        if y_pos > height:
+            break
         line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
         drawing.add(line)
-    
-    # Major grid lines (5mm spacing equivalent)
-    major_spacing_x = width / 12  # 12 divisions across width
-    major_spacing_y = height / 4   # 4 divisions across height
+
+    # Major grid lines: 1 large box horizontally, 2 large boxes vertically.
+    major_spacing_x = ECG_LARGE_BOX_MM * mm
+    major_spacing_y = (2.0 * ECG_LARGE_BOX_MM) * mm
     
     # Vertical major grid lines
-    for i in range(13):
+    for i in range(int(width / major_spacing_x) + 2):
         x_pos = i * major_spacing_x
+        if x_pos > width:
+            break
         line = Line(x_pos, 0, x_pos, height, strokeColor=major_grid_color, strokeWidth=0.8)
         drawing.add(line)
     
     # Horizontal major grid lines
-    for i in range(5):
+    for i in range(int(height / major_spacing_y) + 2):
         y_pos = i * major_spacing_y
+        if y_pos > height:
+            break
         line = Line(0, y_pos, width, y_pos, strokeColor=major_grid_color, strokeWidth=0.8)
         drawing.add(line)
     
@@ -863,7 +872,7 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
             drawing = create_reportlab_ecg_drawing_with_real_data(
                 lead, 
                 filtered_ecg_data.get(lead), 
-                width=460, 
+                width=REPORT_STRIP_WIDTH_POINTS, 
                 height=45,
                 wave_gain_mm_mv=wave_gain_mm_mv,
                 sampling_rate=samples_per_second,
@@ -887,7 +896,7 @@ def capture_real_ecg_graphs_from_dashboard(dashboard_instance=None, ecg_test_pag
         print(f" Successfully created {len(lead_drawings)}/12 ECG drawings with MAXIMUM heartbeats!")
     return lead_drawings
 
-def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, height=45, wave_gain_mm_mv=None, sampling_rate=500.0, settings_manager=None):
+def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=REPORT_STRIP_WIDTH_POINTS, height=45, wave_gain_mm_mv=None, sampling_rate=500.0, settings_manager=None):
     """
     Create ECG drawing using ReportLab with REAL ECG data using proper time-based scaling
     Returns: ReportLab Drawing with guaranteed pink background and REAL ECG waveform
@@ -913,23 +922,23 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
     bg_rect = Rect(0, 0, width, height, fillColor=bg_color, strokeColor=None)
     drawing.add(bg_rect)
     
-    # STEP 2: Draw pink ECG grid lines (GE/Philips fixed diagnostic scale)
-    # Fixed diagnostic grid requirements:
-    # Minor: 0.04s / 0.1mV
-    # Major: 0.20s / 1.0mV
-    # At 25 mm/s: 0.04s = 1mm, 0.20s = 5mm
-    # At 10 mm/mV: 0.1mV = 1mm, 1.0mV = 10mm
+    # STEP 2: Draw pink ECG grid lines using the report's actual paper scale.
+    # The report layout uses 40 large boxes across A4 width, so:
+    #   large box = ECG_LARGE_BOX_MM (5.25mm)
+    #   small box = ECG_SMALL_BOX_MM (1.05mm)
+    # The waveform speed scaling already uses ECG_SPEED_SCALE, so the paper grid
+    # must use the same box dimensions or the waves-per-box timing drifts.
     light_grid_color = colors.HexColor("#ffd1d1")  # Darker minor grid
     major_grid_color = colors.HexColor("#ffb3b3")   # Darker major grid
     
     from reportlab.lib.units import mm
     
-    # Minor grid: 1mm spacing (0.04s / 0.1mV)
-    minor_spacing_mm = 1.0 * mm
+    # Minor grid: 1 small box spacing.
+    minor_spacing_mm = ECG_SMALL_BOX_MM * mm
     minor_spacing_x_points = minor_spacing_mm
     minor_spacing_y_points = minor_spacing_mm
     
-    # Vertical minor lines (every 0.04s = 1mm at 25 mm/s)
+    # Vertical minor lines
     num_minor_x = int(width / minor_spacing_x_points) + 1
     for i in range(num_minor_x):
         x_pos = i * minor_spacing_x_points
@@ -937,7 +946,7 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
             line = Line(x_pos, 0, x_pos, height, strokeColor=light_grid_color, strokeWidth=0.4)
             drawing.add(line)
     
-    # Horizontal minor lines (every 0.1mV = 1mm at 10 mm/mV)
+    # Horizontal minor lines
     num_minor_y = int(height / minor_spacing_y_points) + 1
     for i in range(num_minor_y):
         y_pos = i * minor_spacing_y_points
@@ -945,9 +954,9 @@ def create_reportlab_ecg_drawing_with_real_data(lead_name, ecg_data, width=460, 
             line = Line(0, y_pos, width, y_pos, strokeColor=light_grid_color, strokeWidth=0.4)
             drawing.add(line)
     
-    # Major grid: 5mm horizontal (0.20s), 10mm vertical (1.0mV)
-    major_spacing_x_mm = 5.0 * mm  # 0.20s at 25 mm/s
-    major_spacing_y_mm = 10.0 * mm  # 1.0mV at 10 mm/mV
+    # Major grid: 1 large box horizontally, 2 large boxes vertically.
+    major_spacing_x_mm = ECG_LARGE_BOX_MM * mm
+    major_spacing_y_mm = (2.0 * ECG_LARGE_BOX_MM) * mm
     
     # Vertical major lines (every 0.20s = 5mm)
     num_major_x = int(width / major_spacing_x_mm) + 1
