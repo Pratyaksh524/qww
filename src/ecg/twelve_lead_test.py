@@ -8261,9 +8261,23 @@ class ECGTestPage(QWidget):
                             
                             # Handle Display Mode: Scroll vs Sweep
                             if getattr(self, 'display_mode', 'scroll') == 'sweep' and len(raw) >= window_len:
-                                # Sweep Mode: Simulate moving bar
-                                # Use time-based cursor for smooth sweeping
-                                cursor = int(time.time() * fs) % window_len
+                                # Sweep Mode: use an internal capped cursor so app focus changes
+                                # or slow frames do not cause a huge visual jump on resume.
+                                if not hasattr(self, '_sweep_cursor_state'):
+                                    self._sweep_cursor_state = {}
+                                sweep_key = ('serial', i)
+                                now_mono = time.monotonic()
+                                sweep_state = self._sweep_cursor_state.get(sweep_key, {})
+                                prev_cursor = int(sweep_state.get('cursor', window_len - 1))
+                                prev_ts = float(sweep_state.get('ts', now_mono))
+                                raw_step = max(1, int(round((now_mono - prev_ts) * fs)))
+                                step = min(raw_step, max(1, int(0.08 * fs)))
+                                cursor = (prev_cursor + step) % window_len
+                                self._sweep_cursor_state[sweep_key] = {
+                                    'cursor': cursor,
+                                    'ts': now_mono,
+                                    'window_len': window_len,
+                                }
                                 
                                 # Take the last window_len samples (the current window of data)
                                 raw_window = raw[-window_len:]
@@ -8591,10 +8605,24 @@ class ECGTestPage(QWidget):
                             display_mode = getattr(self, 'display_mode', 'scroll')
                             
                             if display_mode == 'sweep' and len(raw_data) >= samples_to_show:
-                                # Sweep Mode
+                                # Sweep Mode: use an internal capped cursor so app focus changes
+                                # or repeated background work do not deform/jump the live trace.
                                 window_len = samples_to_show
-                                # Use time-based cursor for smooth sweeping
-                                cursor = int(time.time() * sampling_rate) % window_len
+                                if not hasattr(self, '_sweep_cursor_state'):
+                                    self._sweep_cursor_state = {}
+                                sweep_key = ('live', i)
+                                now_mono = time.monotonic()
+                                sweep_state = self._sweep_cursor_state.get(sweep_key, {})
+                                prev_cursor = int(sweep_state.get('cursor', window_len - 1))
+                                prev_ts = float(sweep_state.get('ts', now_mono))
+                                raw_step = max(1, int(round((now_mono - prev_ts) * sampling_rate)))
+                                step = min(raw_step, max(1, int(0.08 * sampling_rate)))
+                                cursor = (prev_cursor + step) % window_len
+                                self._sweep_cursor_state[sweep_key] = {
+                                    'cursor': cursor,
+                                    'ts': now_mono,
+                                    'window_len': window_len,
+                                }
                                 
                                 raw_window = raw_data[-window_len:]
                                 # Shift to align newest data (at end of raw_window) to cursor

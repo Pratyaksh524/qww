@@ -2185,7 +2185,8 @@ class Dashboard(QWidget):
         """
         try:
             from scipy.signal import butter, filtfilt, find_peaks
-            
+            import time
+
             # Ensure we have enough data
             if len(ecg_signal) < 200:
                 return {}
@@ -2330,6 +2331,31 @@ class Dashboard(QWidget):
                     
                     # Ensure reasonable range (10-300 BPM)
                     heart_rate = max(10, min(300, heart_rate))
+
+                    # Focus-switch / heavy-work stabilizer:
+                    # if UI callbacks were delayed (e.g. app switch, report generation),
+                    # do not allow one noisy frame to jump far away from the prior stable BPM.
+                    now_ts = time.time()
+                    last_metrics_ts = getattr(self, '_dashboard_last_metrics_ts', None)
+                    self._dashboard_last_metrics_ts = now_ts
+                    if last_metrics_ts is not None and (now_ts - last_metrics_ts) > 2.0:
+                        self._dashboard_resume_grace_until = max(
+                            getattr(self, '_dashboard_resume_grace_until', 0.0),
+                            now_ts + 2.0,
+                        )
+
+                    prev_bpm = getattr(self, '_dashboard_bpm_ema', None)
+                    if prev_bpm is not None:
+                        grace_until = getattr(self, '_dashboard_resume_grace_until', 0.0)
+                        max_jump_bpm = 8.0 if now_ts < grace_until else 18.0
+                        bpm_delta = heart_rate - prev_bpm
+                        if abs(bpm_delta) > max_jump_bpm:
+                            clamped = prev_bpm + np.sign(bpm_delta) * max_jump_bpm
+                            print(
+                                f" Dashboard BPM jump clamp: raw={heart_rate:.1f}, "
+                                f"prev={prev_bpm:.1f}, clamped={clamped:.1f}"
+                            )
+                            heart_rate = clamped
                     
                     # STABLE BPM WITH EXPONENTIAL MOVING AVERAGE (EMA) - Clinical Standard
                     # EMA provides stability while responding to genuine changes
@@ -3133,6 +3159,15 @@ class Dashboard(QWidget):
         if getattr(self, '_report_thread', None) is not None and self._report_thread.isRunning():
             print("ℹ️ Report generation is already running. Please wait for it to finish.")
             return
+
+        # Hold dashboard BPM smoothing steady for a short grace period while the
+        # report snapshot/background work starts, so repeated report clicks or
+        # app focus changes do not create a transient spike in the live display.
+        try:
+            import time as _time
+            self._dashboard_resume_grace_until = _time.time() + 1.5
+        except Exception:
+            pass
 
         # ── STEP 1: Freeze ALL metric values RIGHT NOW (before any background work) ──
         # This is the key fix for "different values each click even though machine
