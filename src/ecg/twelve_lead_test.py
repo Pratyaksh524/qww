@@ -5738,7 +5738,7 @@ class ECGTestPage(QWidget):
         print(f" Serial connection established successfully on {port_to_use}!")
 
         # ── Start timers (was right after serial_reader.start() in original code) ──
-        timer_interval = 20  # 50 FPS
+        timer_interval = 16  # ~60 FPS target for smoother 500 Hz hardware rendering
         self.timer.start(timer_interval)
         QTimer.singleShot(10, self.update_plots)   # instant first frame
 
@@ -8261,9 +8261,23 @@ class ECGTestPage(QWidget):
                             
                             # Handle Display Mode: Scroll vs Sweep
                             if getattr(self, 'display_mode', 'scroll') == 'sweep' and len(raw) >= window_len:
-                                # Sweep Mode: Simulate moving bar
-                                # Use time-based cursor for smooth sweeping
-                                cursor = int(time.time() * fs) % window_len
+                                # Sweep Mode: use an internal capped cursor so app focus changes
+                                # or slow frames do not cause a huge visual jump on resume.
+                                if not hasattr(self, '_sweep_cursor_state'):
+                                    self._sweep_cursor_state = {}
+                                sweep_key = ('serial', i)
+                                now_mono = time.monotonic()
+                                sweep_state = self._sweep_cursor_state.get(sweep_key, {})
+                                prev_cursor = int(sweep_state.get('cursor', window_len - 1))
+                                prev_ts = float(sweep_state.get('ts', now_mono))
+                                raw_step = max(1, int(round((now_mono - prev_ts) * fs)))
+                                step = min(raw_step, max(1, int(0.08 * fs)))
+                                cursor = (prev_cursor + step) % window_len
+                                self._sweep_cursor_state[sweep_key] = {
+                                    'cursor': cursor,
+                                    'ts': now_mono,
+                                    'window_len': window_len,
+                                }
                                 
                                 # Take the last window_len samples (the current window of data)
                                 raw_window = raw[-window_len:]
@@ -8337,6 +8351,15 @@ class ECGTestPage(QWidget):
                             # Generate X-axis to ensure correct time scaling on the 0-10s plot
                             # We map the data to [0, seconds_to_show]
                             x_axis = np.linspace(0, seconds_to_show, len(resampled))
+
+                            # Frame-to-frame blend to reduce visible jitter at 500 Hz input
+                            # while preserving responsiveness at 50/60 FPS.
+                            if not hasattr(self, '_display_frame_cache'):
+                                self._display_frame_cache = {}
+                            prev_frame = self._display_frame_cache.get(('12box', i))
+                            if prev_frame is not None and len(prev_frame) == len(resampled):
+                                resampled = (0.35 * resampled) + (0.65 * prev_frame)
+                            self._display_frame_cache[('12box', i)] = np.asarray(resampled, dtype=float).copy()
                             
                             # Use connect='finite' to handle NaNs (breaks the line at gaps)
                             self.data_lines[i].setData(x_axis, resampled, connect='finite')
@@ -8591,10 +8614,24 @@ class ECGTestPage(QWidget):
                             display_mode = getattr(self, 'display_mode', 'scroll')
                             
                             if display_mode == 'sweep' and len(raw_data) >= samples_to_show:
-                                # Sweep Mode
+                                # Sweep Mode: use an internal capped cursor so app focus changes
+                                # or repeated background work do not deform/jump the live trace.
                                 window_len = samples_to_show
-                                # Use time-based cursor for smooth sweeping
-                                cursor = int(time.time() * sampling_rate) % window_len
+                                if not hasattr(self, '_sweep_cursor_state'):
+                                    self._sweep_cursor_state = {}
+                                sweep_key = ('live', i)
+                                now_mono = time.monotonic()
+                                sweep_state = self._sweep_cursor_state.get(sweep_key, {})
+                                prev_cursor = int(sweep_state.get('cursor', window_len - 1))
+                                prev_ts = float(sweep_state.get('ts', now_mono))
+                                raw_step = max(1, int(round((now_mono - prev_ts) * sampling_rate)))
+                                step = min(raw_step, max(1, int(0.08 * sampling_rate)))
+                                cursor = (prev_cursor + step) % window_len
+                                self._sweep_cursor_state[sweep_key] = {
+                                    'cursor': cursor,
+                                    'ts': now_mono,
+                                    'window_len': window_len,
+                                }
                                 
                                 raw_window = raw_data[-window_len:]
                                 # Shift to align newest data (at end of raw_window) to cursor
@@ -8769,6 +8806,12 @@ class ECGTestPage(QWidget):
                                 pass
 
                             # INSTANT DISPLAY: Always update the plot, even with minimal data
+                            if not hasattr(self, '_display_frame_cache'):
+                                self._display_frame_cache = {}
+                            prev_frame = self._display_frame_cache.get(('live', i))
+                            if prev_frame is not None and len(prev_frame) == len(scaled_data):
+                                scaled_data = (0.35 * scaled_data) + (0.65 * prev_frame)
+                            self._display_frame_cache[('live', i)] = np.asarray(scaled_data, dtype=float).copy()
                             self.data_lines[i].setData(time_axis, scaled_data)
                             
                             # Optimized: Update Y-range only every 10 updates (reduces expensive calculations)
