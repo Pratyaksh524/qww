@@ -579,6 +579,60 @@ def apply_report_ecg_filters(signal, sampling_rate, settings_manager):
     # before the strip ends. Keep natural morphology after filtering.
     return filtered
 
+
+def _estimate_rr_from_report_strip(ecg_test_page, ecg_data_file, sampling_rate, settings_manager, width_points=460):
+    """Estimate RR from the same Lead II strip window used in the 12:1 report."""
+    try:
+        leads_payload, fs = _collect_12_lead_payload(
+            ecg_test_page,
+            sampling_rate,
+            ecg_data_file=ecg_data_file,
+            window_seconds=STANDARD_REPORT_WINDOW_SECONDS,
+        )
+        lead_ii = leads_payload.get("II") if isinstance(leads_payload, dict) else None
+        if lead_ii is None:
+            return None
+
+        signal = apply_report_ecg_filters(lead_ii, fs, settings_manager)
+        if signal is None or len(signal) < max(3, int(fs * 2.0)):
+            return None
+
+        wave_speed_setting = settings_manager.get_setting("wave_speed")
+        speed_mm_s = float(wave_speed_setting) if wave_speed_setting else None
+        if not speed_mm_s or speed_mm_s <= 0:
+            return None
+
+        width_mm = float(width_points) / mm
+        effective_speed_mm_s = speed_mm_s * ECG_SPEED_SCALE
+        max_display_seconds = width_mm / max(effective_speed_mm_s, 1e-6)
+        display_samples = max(1, min(len(signal), int(round(max_display_seconds * fs))))
+        strip_signal = np.asarray(signal[-display_samples:], dtype=float)
+        if len(strip_signal) < max(3, int(fs * 2.0)):
+            return None
+
+        from scipy.signal import find_peaks
+
+        centered = strip_signal - np.nanmedian(strip_signal)
+        diff_signal = np.diff(centered, prepend=centered[0])
+        energy = diff_signal * diff_signal
+        window = max(1, int(0.12 * fs))
+        envelope = np.convolve(energy, np.ones(window) / window, mode="same")
+        threshold = np.mean(envelope) + 0.8 * np.std(envelope)
+        min_distance = max(1, int(0.25 * fs))
+        peaks, _ = find_peaks(envelope, height=threshold, distance=min_distance)
+        if len(peaks) < 2:
+            return None
+
+        rr_ms = np.diff(peaks) * (1000.0 / fs)
+        rr_ms = rr_ms[(rr_ms >= 250.0) & (rr_ms <= 2000.0)]
+        if len(rr_ms) == 0:
+            return None
+
+        return int(round(float(np.median(rr_ms))))
+    except Exception as exc:
+        print(f" RR strip estimation failed: {exc}")
+        return None
+
 def create_ecg_grid_with_waveform(ecg_data, lead_name, width=6, height=2):
     """
     Create ECG graph with pink grid background and dark ECG waveform
@@ -1406,7 +1460,26 @@ def generate_ecg_report(
     data["HR_bpm"] = hr_bpm_value
     data["Heart_Rate"] = hr_bpm_value
     data["HR"] = hr_bpm_value
-    if hr_bpm_value > 0:
+
+    report_sampling_rate = (
+        getattr(getattr(ecg_test_page, "sampler", None), "sampling_rate", None)
+        or getattr(ecg_test_page, "sampling_rate", None)
+        or 500.0
+    )
+    rr_from_strip_ms = _estimate_rr_from_report_strip(
+        ecg_test_page=ecg_test_page,
+        ecg_data_file=ecg_data_file,
+        sampling_rate=report_sampling_rate,
+        settings_manager=settings_manager,
+    )
+    if rr_from_strip_ms and rr_from_strip_ms > 0:
+        data["RR_ms"] = rr_from_strip_ms
+        if not hr_bpm_value:
+            data["HR_bpm"] = int(round(60000.0 / rr_from_strip_ms))
+            data["Heart_Rate"] = data["HR_bpm"]
+            data["HR"] = data["HR_bpm"]
+        print(f" Using RR from plotted Lead II strip: {data['RR_ms']} ms")
+    elif hr_bpm_value > 0:
         data["RR_ms"] = int(60000 / hr_bpm_value)
     else:
         data["RR_ms"] = data.get("RR_ms", 0)
@@ -1665,15 +1738,17 @@ def generate_ecg_report(
     date_time_str = patient.get("date_time", "")
 
     # Get real ECG data from dashboard
-    HR = data.get('HR_avg',)
+    HR = _safe_int(data.get('HR') or data.get('HR_bpm') or data.get('HR_avg'), 0)
     PR = data.get('PR',) 
     QRS = data.get('QRS',)
     QT = _safe_float(data.get('QT',), 0.0)
     QTc = _safe_float(data.get('QTc',), 0.0)
     QTcF = data.get('QTc_Fridericia') or data.get('QTcF') or 0
     ST = data.get('ST',)
-    # DYNAMIC RR interval calculation from heart rate (instead of hard-coded 857)
-    RR = int(60000 / HR) if HR and HR > 0 else 0  # RR interval in ms from heart rate
+    # Prefer RR calculated from the same plotted strip; only fall back to HR-derived RR.
+    RR = _safe_int(data.get('RR_ms'), 0)
+    if RR <= 0 and HR > 0:
+        RR = int(60000 / HR)
 
     # Formatting functions
     def _fmt_bpm(value):
